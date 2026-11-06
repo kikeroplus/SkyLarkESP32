@@ -7,6 +7,7 @@
 #include <Preferences.h>
 #include "config.h"
 #include "game.h"
+#include "padmode.h"
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCK, TFT_MOSI, TFT_MISO);
 Arduino_GFX *panel = new Arduino_ST7789(bus, TFT_RST, TFT_ROTATION, TFT_IPS, 240, 320);
@@ -202,6 +203,108 @@ void serialCommands()
   }
 }
 
+// ---- 起動の選択画面: ゲームか、ジョイスティック (PC の USB ゲームパッド) か ----
+// 前回選んだほうを選んでおき、触らなければ 3 秒で始める。スティックの上下 (SW2 でも) で選び、SW1 か押し込みで決める
+const int MODE_GAME = 0, MODE_PAD = 1;
+const int MENU_AUTO_MS = 3000;
+
+void drawMenu(int sel)
+{
+  panel->fillScreen(0x0000);
+  panel->setTextSize(3);
+  panel->setTextColor(to565(0xF0C860));
+  panel->setCursor(LW / 2 - 63, 40);
+  panel->print("SKYLARK");
+  static const char *NAME[] = {"GAME", "JOYSTICK"};
+  static const char *SUB[] = {"PLAY SKYLARK", "USB GAMEPAD FOR PC"};
+  for (int i = 0; i < 2; i++)
+  {
+    int y = 110 + i * 80;
+    bool on = i == sel;
+    panel->fillRoundRect(24, y, LW - 48, 62, 8, to565(on ? 0xF0C860 : 0x0A111C));
+    if (!on)
+      panel->drawRoundRect(24, y, LW - 48, 62, 8, to565(0x1C3448));
+    panel->setTextSize(2);
+    panel->setTextColor(to565(on ? 0x04070C : 0xD8E6F0));
+    panel->setCursor(LW / 2 - (int)strlen(NAME[i]) * 6, y + 14);
+    panel->print(NAME[i]);
+    panel->setTextSize(1);
+    panel->setTextColor(to565(on ? 0x04070C : 0x5A7084));
+    panel->setCursor(LW / 2 - (int)strlen(SUB[i]) * 3, y + 40);
+    panel->print(SUB[i]);
+  }
+  panel->setTextSize(1);
+  panel->setTextColor(to565(0x5A7084));
+  panel->setCursor(LW / 2 - 63, 286);
+  panel->print("STICK: SELECT  SW1: OK");
+}
+
+// 自動で始めるまでの秒読み (0 で消す)
+void drawCountdown(int left)
+{
+  panel->fillRect(0, 298, LW, 12, 0x0000);
+  if (left <= 0)
+    return;
+  char t[16];
+  snprintf(t, sizeof(t), "AUTO START %d", (left + 999) / 1000);
+  panel->setTextSize(1);
+  panel->setTextColor(to565(0xD8E6F0));
+  panel->setCursor(LW / 2 - (int)strlen(t) * 3, 300);
+  panel->print(t);
+}
+
+int chooseMode()
+{
+  int sel = prefs.getInt("mode", MODE_GAME) == MODE_PAD ? MODE_PAD : MODE_GAME;
+  // 電源を入れたときに押していたボタンを、選んだことにしない (いったん離すまで待つ)
+  bool armed = false, wasUp = false, wasDown = false, wasSw2 = false;
+  bool autoOn = true;
+  uint32_t t0 = millis();
+  int shown = -1, shownLeft = -1;
+  for (;;)
+  {
+    ax.read();
+    ay.read();
+    bool sw1 = digitalRead(SW1_PIN) == LOW, sw2 = digitalRead(SW2_PIN) == LOW, stick = digitalRead(JOY_SW_PIN) == LOW;
+    bool up = stickY() >= DIR_ON, down = stickY() <= -DIR_ON;
+    if (!sw1 && !stick)
+      armed = true;
+    else if (armed)
+      break;
+    if ((up && !wasUp) || (down && !wasDown) || (sw2 && !wasSw2))
+    {
+      sel = up ? MODE_GAME : down ? MODE_PAD : 1 - sel;
+      autoOn = false; // 触ったら自動では始めない
+    }
+    wasUp = up;
+    wasDown = down;
+    wasSw2 = sw2;
+    int left = autoOn ? MENU_AUTO_MS - (int)(millis() - t0) : 0;
+    if (autoOn && left <= 0)
+      break;
+    if (sel != shown)
+    {
+      drawMenu(sel);
+      shown = sel;
+      shownLeft = -1;
+    }
+    int secs = left > 0 ? (left + 999) / 1000 : 0;
+    if (secs != shownLeft)
+    {
+      drawCountdown(left);
+      shownLeft = secs;
+    }
+    delay(10);
+  }
+  if (prefs.getInt("mode", -1) != sel)
+    prefs.putInt("mode", sel);
+  panel->fillScreen(0x0000);
+  // 決めたボタンを離すまで待つ (ゲームの最初に撃ったことにならないように)
+  while (digitalRead(SW1_PIN) == LOW || digitalRead(JOY_SW_PIN) == LOW)
+    delay(10);
+  return sel;
+}
+
 void setup()
 {
   Serial.begin(921600);
@@ -212,10 +315,6 @@ void setup()
   panel->setTextSize(3);
   panel->setCursor(LW / 2 - 63, LH / 2 - 20);
   panel->print("SKYLARK");
-  panel->setTextSize(1);
-  panel->setTextColor(to565(0xFFF4D8));
-  panel->setCursor(LW / 2 - 30, LH / 2 + 16);
-  panel->print("LOADING...");
   // GPIO13 は SPI2 の MISO の決まったピンなので、スイッチの pinMode は液晶の begin のあとでする
   pinMode(SW1_PIN, INPUT_PULLUP);
   pinMode(SW2_PIN, INPUT_PULLUP);
@@ -228,13 +327,24 @@ void setup()
   ax.calibrate(); // 起動時はスティックに触らない前提で、その位置を中央にする
   ay.calibrate();
 
+  prefs.begin("skylark", false);
+  if (chooseMode() == MODE_PAD)
+    runPadMode(panel); // 戻らない
+  panel->setTextSize(3);
+  panel->setTextColor(to565(0xF0C860));
+  panel->setCursor(LW / 2 - 63, LH / 2 - 20);
+  panel->print("SKYLARK");
+  panel->setTextSize(1);
+  panel->setTextColor(to565(0xFFF4D8));
+  panel->setCursor(LW / 2 - 30, LH / 2 + 16);
+  panel->print("LOADING...");
+
   if (!gfx.begin())
     Serial.println("gfx begin failed (memory)");
   disableCore0WDT(); // コア 0 は音を作るのと液晶へ送るので埋まるので、IDLE0 の見張りは外す
   snd.begin();
   game = new Game();
   game->Snd = &snd;
-  prefs.begin("skylark", false);
   loadPrefs();
   game->TableChanged = saveTable;
   applyVolume();

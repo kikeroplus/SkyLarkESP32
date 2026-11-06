@@ -43,9 +43,10 @@ def snap(ser, path):
 
 def main():
     port, prefix, cmds = sys.argv[1], sys.argv[2], sys.argv[3:]
-    ser = serial.Serial()  # 開くときに DTR / RTS を動かさない (動かすと基板がリセットされる)
+    # 内蔵 USB は TinyUSB で動いていて、DTR を立てないと基板は何も送ってこない。RTS は立てない (DTR と RTS の組み合わせでリセットされる)
+    ser = serial.Serial()
     ser.port, ser.baudrate, ser.timeout = port, 921600, 0.5
-    ser.dtr = ser.rts = False
+    ser.dtr, ser.rts = True, False
     ser.open()
     n = 0
     for c in cmds:
