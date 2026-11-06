@@ -479,7 +479,7 @@ void loopSounds(float *mix, bool mute)
       rainLp += (noise() - rainLp) * 0.35f;
       rainHp = rainLp - rainLp2;
       rainLp2 += (rainLp - rainLp2) * 0.02f;
-      v += rainHp * 0.9f * curRain;
+      v += rainHp * 0.55f * curRain;
     }
     if (curUfo > 0.001f || curBeam > 0.001f)
       ufoLfo = wrap(ufoLfo + 6.5f / SR);
