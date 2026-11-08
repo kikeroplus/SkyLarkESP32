@@ -8,11 +8,14 @@
 #include "config.h"
 #include "game.h"
 #include "padmode.h"
+#include "game2.h"
+#include <algorithm>
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCK, TFT_MOSI, TFT_MISO);
 Arduino_GFX *panel = new Arduino_ST7789(bus, TFT_RST, TFT_ROTATION, TFT_IPS, 240, 320);
 Gfx gfx;
 Game *game = nullptr;
+Game2 *game2 = nullptr; // 2 本目を選んだときだけ作る
 Sound snd;
 Preferences prefs;
 
@@ -205,7 +208,10 @@ void drawFrame()
   for (int s = 0; s < STRIPS; s++)
   {
     gfx.startStrip(s);
-    game->Draw(gfx);
+    if (game2)
+      game2->Draw(gfx);
+    else
+      game->Draw(gfx);
     if (snapshot)
       Serial.write((const uint8_t *)gfx.buf, LW * LSTRIP * 2);
     gfx.finishStrip(panel); // 送るのは裏のタスク。そのあいだに次の帯を描く
@@ -229,6 +235,8 @@ void serialCommands()
     int c = Serial.read();
     if (c == 's')
       snapshot = true;
+    else if (!game)
+      continue;
     else if (c == 'f')
     {
       Input none = {};
@@ -242,9 +250,12 @@ void serialCommands()
   }
 }
 
-// ---- 起動の選択画面: ゲームか、ジョイスティック (PC の USB ゲームパッド) か ----
-// 前回選んだほうを選んでおき、触らなければ 3 秒で始める。スティックの上下 (SW2 でも) で選び、SW1 か押し込みで決める
-const int MODE_GAME = 0, MODE_PAD = 1;
+// ---- 起動の選択画面: SKYLARK か、2 本目 (FOUNDRY) か、ジョイスティック (PC の USB ゲームパッド) か ----
+// 前回選んだものを選んでおき、触らなければ 3 秒で始める。スティックの上下 (SW2 でも) で選び、SW1 か押し込みで決める
+// 保存する番号は前からのまま (0 = SKYLARK、1 = ジョイスティック)。2 本目は 2。画面の並びは MENU_ORDER
+const int MODE_GAME = 0, MODE_PAD = 1, MODE_G2 = 2;
+const int MENU_N = 3;
+const int MENU_ORDER[MENU_N] = {MODE_GAME, MODE_G2, MODE_PAD};
 const int MENU_AUTO_MS = 3000;
 
 void drawMenu(int sel)
@@ -254,22 +265,22 @@ void drawMenu(int sel)
   panel->setTextColor(to565(0xF0C860));
   panel->setCursor(LW / 2 - 63, 40);
   panel->print("SKYLARK");
-  static const char *NAME[] = {"GAME", "JOYSTICK"};
-  static const char *SUB[] = {"PLAY SKYLARK", "USB GAMEPAD FOR PC"};
-  for (int i = 0; i < 2; i++)
+  static const char *NAME[] = {"SKYLARK", "FOUNDRY", "JOYSTICK"};
+  static const char *SUB[] = {"PLAY SKYLARK", "HEXAPOD TANK (WIP)", "USB GAMEPAD FOR PC"};
+  for (int i = 0; i < MENU_N; i++)
   {
-    int y = 110 + i * 80;
+    int y = 92 + i * 64;
     bool on = i == sel;
-    panel->fillRoundRect(24, y, LW - 48, 62, 8, to565(on ? 0xF0C860 : 0x0A111C));
+    panel->fillRoundRect(24, y, LW - 48, 54, 8, to565(on ? 0xF0C860 : 0x0A111C));
     if (!on)
-      panel->drawRoundRect(24, y, LW - 48, 62, 8, to565(0x1C3448));
+      panel->drawRoundRect(24, y, LW - 48, 54, 8, to565(0x1C3448));
     panel->setTextSize(2);
     panel->setTextColor(to565(on ? 0x04070C : 0xD8E6F0));
-    panel->setCursor(LW / 2 - (int)strlen(NAME[i]) * 6, y + 14);
+    panel->setCursor(LW / 2 - (int)strlen(NAME[i]) * 6, y + 10);
     panel->print(NAME[i]);
     panel->setTextSize(1);
     panel->setTextColor(to565(on ? 0x04070C : 0x5A7084));
-    panel->setCursor(LW / 2 - (int)strlen(SUB[i]) * 3, y + 40);
+    panel->setCursor(LW / 2 - (int)strlen(SUB[i]) * 3, y + 34);
     panel->print(SUB[i]);
   }
   panel->setTextSize(1);
@@ -294,7 +305,10 @@ void drawCountdown(int left)
 
 int chooseMode()
 {
-  int sel = prefs.getInt("mode", MODE_GAME) == MODE_PAD ? MODE_PAD : MODE_GAME;
+  int saved = prefs.getInt("mode", MODE_GAME), sel = 0; // sel は画面の並びの番号
+  for (int i = 0; i < MENU_N; i++)
+    if (MENU_ORDER[i] == saved)
+      sel = i;
   // 電源を入れたときに押していたボタンを、選んだことにしない (いったん離すまで待つ)
   bool armed = false, wasUp = false, wasDown = false, wasSw2 = false;
   bool autoOn = true;
@@ -312,7 +326,7 @@ int chooseMode()
       break;
     if ((up && !wasUp) || (down && !wasDown) || (sw2 && !wasSw2))
     {
-      sel = up ? MODE_GAME : down ? MODE_PAD : 1 - sel;
+      sel = up ? (sel + MENU_N - 1) % MENU_N : (sel + 1) % MENU_N;
       autoOn = false; // 触ったら自動では始めない
     }
     wasUp = up;
@@ -335,13 +349,14 @@ int chooseMode()
     }
     delay(10);
   }
-  if (prefs.getInt("mode", -1) != sel)
-    prefs.putInt("mode", sel);
+  int mode = MENU_ORDER[sel];
+  if (prefs.getInt("mode", -1) != mode)
+    prefs.putInt("mode", mode);
   panel->fillScreen(0x0000);
   // 決めたボタンを離すまで待つ (ゲームの最初に撃ったことにならないように)
   while (digitalRead(SW1_PIN) == LOW || digitalRead(JOY_SW_PIN) == LOW)
     delay(10);
-  return sel;
+  return mode;
 }
 
 void setup()
@@ -367,8 +382,28 @@ void setup()
   ay.calibrate();
 
   prefs.begin("skylark", false);
-  if (chooseMode() == MODE_PAD)
+  int mode = chooseMode();
+  if (mode == MODE_PAD)
     runPadMode(panel); // 戻らない
+  if (mode == MODE_G2)
+  {
+    panel->setTextSize(3);
+    panel->setTextColor(to565(0xC9A227));
+    panel->setCursor(LW / 2 - 63, LH / 2 - 20);
+    panel->print("FOUNDRY");
+    panel->setTextSize(1);
+    panel->setTextColor(to565(0xDCD8CF));
+    panel->setCursor(LW / 2 - 30, LH / 2 + 16);
+    panel->print("LOADING...");
+    if (!gfx.begin())
+      Serial.println("gfx begin failed (memory)");
+    disableCore0WDT();
+    game2 = new Game2();
+    if (!game2->begin())
+      Serial.println("game2 begin failed (psram)");
+    Serial.printf("game2 bg built in %lu ms  heap %u  psram %u\n", game2->buildMs, ESP.getFreeHeap(), ESP.getFreePsram());
+    return;
+  }
   panel->setTextSize(3);
   panel->setTextColor(to565(0xF0C860));
   panel->setCursor(LW / 2 - 63, LH / 2 - 20);
@@ -390,8 +425,51 @@ void setup()
   Serial.printf("heap %u  psram %u\n", ESP.getFreeHeap(), ESP.getFreePsram());
 }
 
+// 2 本目: 1 秒 30 回進めて描く。SW3 を長く押すと選択画面へ戻る (再起動)
+void loop2()
+{
+  static uint32_t next = millis();
+  static uint32_t lastLog = millis();
+  pollInput();
+  serialCommands();
+  uint32_t now = millis();
+  if ((int32_t)(now - next) < 0)
+    return;
+  int n = 0;
+  while ((int32_t)(now - next) >= 0 && n < 2)
+  {
+    uint32_t t0 = micros();
+    Input in = readInput();
+    if (in.PausePressed)
+      ESP.restart();
+    game2->Step(in);
+    stepUs += micros() - t0;
+    next += 1000 / Game2::FPS + ((next % 3) == 0 ? 1 : 0);
+    n++;
+  }
+  if ((int32_t)(now - next) >= 0)
+    next = now + 33;
+  drawFrame();
+  if (millis() - lastLog >= 5000 && frames > 0)
+  {
+    uint32_t f = frames;
+    Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f\n", drawUs / f, drawMax, gfx.usPush / f, stepUs / f,
+                  f * 1000.0f / (millis() - lastLog));
+    Serial.printf("  bg %lu  anim %lu  objects %lu  fore %lu\n", game2->profBg / f, game2->profAnim / f, game2->profObj / f, game2->profFore / f);
+    game2->profBg = game2->profAnim = game2->profObj = game2->profFore = 0;
+    drawUs = drawMax = stepUs = frames = 0;
+    gfx.usPush = 0;
+    lastLog = millis();
+  }
+}
+
 void loop()
 {
+  if (game2)
+  {
+    loop2();
+    return;
+  }
   static uint32_t next = millis();
   static uint32_t lastLog = millis();
   pollInput();
