@@ -2183,10 +2183,11 @@ void Game::drawTitle(Gfx &g)
   drawPostcardScene(g, 26, y0 + 74, SW - 52, 84);
   int ty = y0 + 172;
   g.text(SW / 2, ty, DEEP, "STICK : MOVE   SW1 : SHOT", Datum::TC);
-  g.text(SW / 2, ty + 15, BROWN, "SW2 : BOMB   SW3 : PAUSE", Datum::TC);
+  g.text(SW / 2, ty + 15, BROWN, "SW2 : BOMB   SW3 : SOUND", Datum::TC);
   g.text(SW / 2, ty + 30, BROWN, "PUSH THE STICK : SLOW", Datum::TC);
-  g.text(SW / 2, ty + 54, BROWN, "(C) 2026", Datum::TC);
-  g.text(SW / 2, ty + 70, DEEP, "MEADOW VALE - HIGH FELLS", Datum::TC);
+  g.text(SW / 2, ty + 45, BROWN, "HOLD SW3 : PAUSE", Datum::TC);
+  g.text(SW / 2, ty + 64, BROWN, "(C) 2026", Datum::TC);
+  g.text(SW / 2, ty + 78, DEEP, "MEADOW VALE - HIGH FELLS", Datum::TC);
   if ((frame / 15) % 2 != 0)
     banner(g, y0 + 302, GOLD, "PUSH SW1", 2);
 }
@@ -2392,18 +2393,36 @@ void Game::drawOverlay(Gfx &g)
   }
 }
 
+// 音量の目盛り (4 本の棒。OFF のときは OFF と出す)。y は上の端
+void Game::drawVolumeBars(Gfx &g, int y)
+{
+  if (VolumeLevel == 0)
+  {
+    banner(g, y + 4, 0xE07060, "OFF", 2);
+    return;
+  }
+  const int bw = 14, gap = 6, n = VOL_LEVELS - 1, x0 = SW / 2 - (n * bw + (n - 1) * gap) / 2;
+  for (int i = 0; i < n; i++)
+  {
+    int h = 8 + i * 6, x = x0 + i * (bw + gap);
+    if (i < VolumeLevel)
+      g.fillRect(x, y + 24 - h, bw, h, GOLD);
+    else
+      g.drawRect(x, y + 24 - h, bw, h, 0x807860);
+  }
+}
+
 // 遊びの場面ごとの札 (止めている、コンティニュー、GAME OVER、名前、ランキング)
 void Game::drawModeCard(Gfx &g)
 {
   char s[32];
   if (Paused)
   {
-    static const char *const VOL[] = {"OFF", "LOW", "MID", "HIGH"};
     banner(g, 190, CREAM, "PAUSE", 4);
     banner(g, 244, GOLD, "SW3 : RESUME", 2);
     banner(g, 268, GOLD, "SW2 : QUIT TO TITLE", 2);
-    snprintf(s, sizeof(s), "< SOUND %s >", VOL[VolumeLevel]);
-    banner(g, 300, CREAM, s, 2);
+    banner(g, 300, CREAM, "<  SOUND  >", 2);
+    drawVolumeBars(g, 326);
     return;
   }
   switch (mode)
@@ -2706,6 +2725,13 @@ void Game::drawWorldRest(Gfx &g)
   t0 = micros();
   drawOverlay(g);
   drawModeCard(g);
+  if (volumeT > 0 && !Paused) // SW3 で音量を変えたら、しばらく音量の札を出す
+  {
+    g.fillRect(SW / 2 - 70, 52, 140, 58, 0x202830);
+    g.drawRect(SW / 2 - 70, 52, 140, 58, GOLD);
+    banner(g, 58, CREAM, "SOUND", 2);
+    drawVolumeBars(g, 80);
+  }
   prof[6] += micros() - t0;
 }
 

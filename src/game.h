@@ -17,6 +17,7 @@ struct Input
   bool Left, Right, Up, Down, Fire, Slow, Bomb;
   float AX, AY; // アナログスティック (-1〜1。使っていなければ 0)
   bool FirePressed, StartPressed, PausePressed, QuitPressed, BackPressed, BombPressed;
+  bool VolumePressed; // SW3 を短く押した (音量を 1 段上げる。いちばん上の次は OFF)。PausePressed は SW3 の長押し
   bool UpPressed, DownPressed, LeftPressed, RightPressed;
 };
 
@@ -50,8 +51,10 @@ public:
   char LastName[4] = "AAA";
   void (*TableChanged)() = nullptr; // ランキングが変わったら main.cpp が保存する
   Sound *Snd = nullptr;
-  int VolumeLevel = 1;   // 音量 (0 = OFF 〜 3)。止めている画面で変える
+  static constexpr int VOL_LEVELS = 5; // 音量の段階 (0 = OFF 〜 4)
+  int VolumeLevel = 2;   // SW3 を短く押すたびに 1 段上げる。止めている画面では左右でも変えられる
   bool VolumeChanged = false;
+  int volumeT = 0;       // 音量を変えてからしばらく、音量の札を出す
 
   Game();
   void Step(const Input &inp);
@@ -547,6 +550,7 @@ public:
   void drawRanking(Gfx &g);
   void drawOverlay(Gfx &g);
   void drawModeCard(Gfx &g);
+  void drawVolumeBars(Gfx &g, int y);
   void drawGroundRows(Gfx &g);
   void drawWorldRest(Gfx &g);
   void drawFlock(Gfx &g, int dx, int dy, uint32_t c);

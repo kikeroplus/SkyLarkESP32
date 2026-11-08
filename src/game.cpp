@@ -1284,6 +1284,15 @@ void Game::Step(const Input &inp)
 {
   enemyShotSnd = false;
   worldMoved = false;
+  if (volumeT > 0)
+    volumeT--;
+  if (inp.VolumePressed && !Paused) // SW3 を短く押すと音量を 1 段上げる (いちばん上の次は OFF)
+  {
+    VolumeLevel = (VolumeLevel + 1) % VOL_LEVELS;
+    VolumeChanged = true;
+    volumeT = 2 * FPS;
+    sfx(Sfx::Select);
+  }
   switch (mode)
   {
   case Mode::Attract:
@@ -1297,7 +1306,7 @@ void Game::Step(const Input &inp)
       StartDemo();
     break;
   case Mode::Play:
-    if (inp.PausePressed)
+    if (inp.PausePressed || (Paused && inp.VolumePressed)) // 長押しで止める。止めているあいだは短く押しても戻る
     {
       Paused = !Paused;
       sfx(Sfx::Pause);
@@ -1306,9 +1315,9 @@ void Game::Step(const Input &inp)
     {
       if (inp.QuitPressed)
         StartDemo();
-      else if (inp.LeftPressed || inp.RightPressed) // 音量 (OFF 〜 3)
+      else if (inp.LeftPressed || inp.RightPressed) // 音量 (OFF 〜 4)
       {
-        VolumeLevel = constrain(VolumeLevel + (inp.RightPressed ? 1 : -1), 0, 3);
+        VolumeLevel = constrain(VolumeLevel + (inp.RightPressed ? 1 : -1), 0, VOL_LEVELS - 1);
         VolumeChanged = true;
         sfx(Sfx::Select);
       }

@@ -118,6 +118,40 @@ void explosion(float sec, float lpStart, float thump)
   }
 }
 
+// 円盤を落とした: 「ちゅ」と高いところから一気に下がる音のあとに、「どーん」と腹に響く音。
+// 小さなスピーカーでは低い音そのものは出ないので、どーんの低い音はわざと歪ませて倍音を作り、聞こえるようにする
+void chudoon(float sec)
+{
+  float *w = newWave(sec);
+  const float D = 0.07f; // ちゅ の長さ。どーん はここから
+  float ph = 0, tph = 0, lp = 0, lp2 = 0, hp = 0;
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR, v = 0;
+    if (t < D + 0.03f) // ちゅ: 2200Hz から 330Hz へ急に下がる、矩形波と雑音
+    {
+      ph += 2200 * powf(0.15f, min(1.0f, t / D)) / SR;
+      float env = min(1.0f, t / 0.002f) * (1 - t / (D + 0.03f));
+      v += (square(ph) * 0.5f + noise() * 0.25f) * env * 0.75f;
+    }
+    if (t >= D) // どーん: 120Hz から 45Hz へ沈む低い音 (歪ませる) と、こもっていく地鳴りの雑音
+    {
+      float u = t - D, k = u / (sec - D);
+      tph += (45 + 75 * expf(-u * 7)) / SR;
+      float body = tanhf(sinf(tph * PI2) * 2.5f) * expf(-u * 4.5f);
+      float cut = 0.25f * expf(-u * 5) + 0.03f;
+      lp += (noise() - lp) * cut;
+      lp2 += (lp - lp2) * cut;
+      hp += (noise() - hp) * 0.6f; // 当たった瞬間のバリッ (すぐ消える)
+      float crack = hp * expf(-u * 40) * 0.5f;
+      float env = min(1.0f, u / 0.004f);
+      v += (body * 0.8f + lp2 * 3 * powf(1 - k, 1.8f) + crack) * env;
+    }
+    w[i] = v;
+  }
+}
+
 // 連れ去られる鳴き声: 震えるメエ (モー) の声が、高さを下げながら遠ざかる (だんだん小さく、こもり、こだまが残る)
 void bleat(float sec, float f0, float f1, float trem)
 {
@@ -170,7 +204,7 @@ void makeWaves()
     w[i] = (sinf(t * PI2 * 1230) + sinf(t * PI2 * 1847) * 0.7f) * expf(-t * 45) * 0.5f;
   }
   set(Sfx::MomHit, 0.14f);
-  explosion(0.55f, 0.12f, 70);
+  chudoon(0.9f);
   set(Sfx::Boom, 0.3f);
   explosion(1.1f, 0.06f, 50);
   set(Sfx::BigBoom, 0.42f);
@@ -479,7 +513,7 @@ void loopSounds(float *mix, bool mute)
       rainLp += (noise() - rainLp) * 0.35f;
       rainHp = rainLp - rainLp2;
       rainLp2 += (rainLp - rainLp2) * 0.02f;
-      v += rainHp * 0.55f * curRain;
+      v += rainHp * 0.3f * curRain; // 筐体に入れたらケースで響いてうるさかったので下げた (0.55 → 0.3)
     }
     if (curUfo > 0.001f || curBeam > 0.001f)
       ufoLfo = wrap(ufoLfo + 6.5f / SR);
@@ -504,7 +538,7 @@ void loopSounds(float *mix, bool mute)
       v += (sinf(momPh * PI2) + 0.4f * sinf(momPh * 4.02f * PI2)) * env * 0.35f * curMom;
     }
     if (curBirds > 0.001f)
-      v += birdSample() * 0.18f * curBirds;
+      v += birdSample() * 0.09f * curBirds; // 筐体で響くので半分に (0.18 → 0.09)
     mix[i] += v;
   }
 }

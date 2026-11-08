@@ -1,5 +1,5 @@
 // SKYLARK (ESP32 版): WindowsApp/SkyLark のゲームを、Livico と同じ機体 (縦置きの液晶 240x320) で遊ぶ。
-// 操作: ジョイスティックで移動 (押し込むとゆっくり)、SW1 撃つ、SW2 爆弾、SW3 一時停止。止めているあいだ左右で音量
+// 操作: ジョイスティックで移動 (押し込むとゆっくり)、SW1 撃つ、SW2 爆弾、SW3 短く押すと音量 (5 段階)、長押しで一時停止。止めているあいだ左右でも音量
 // 1 秒 30 回ゲームを進め、そのたびに 1 枚描く (描く絵は 1.5 倍の 360x480 を 96 行ずつ 5 本の帯に分け、縮めて液晶へ送る)。
 // ランキングと名前と音量は Preferences (名前空間 skylark) に残す
 #include <Arduino.h>
@@ -69,7 +69,45 @@ struct Key
     return h;
   }
 };
-Key kSw1, kSw2, kSw3, kStick, kUp, kDown, kLeft, kRight;
+Key kSw1, kSw2, kStick, kUp, kDown, kLeft, kRight;
+
+// SW3: 短く押して離すと音量、長く押すと (離すのを待たずに) 一時停止
+const uint32_t PAUSE_HOLD_MS = 600;
+struct HoldKey
+{
+  bool down = false, longFired = false, tap = false, hold = false;
+  uint32_t since = 0;
+  void set(bool d)
+  {
+    uint32_t now = millis();
+    if (d && !down)
+    {
+      since = now;
+      longFired = false;
+    }
+    else if (d && !longFired && now - since >= PAUSE_HOLD_MS)
+    {
+      longFired = true;
+      hold = true;
+    }
+    else if (!d && down && !longFired && now - since >= 20) // 20ms より短いのはチャタリングとして捨てる
+      tap = true;
+    down = d;
+  }
+  bool takeTap()
+  {
+    bool t = tap;
+    tap = false;
+    return t;
+  }
+  bool takeHold()
+  {
+    bool h = hold;
+    hold = false;
+    return h;
+  }
+};
+HoldKey kSw3Hold;
 
 // ゲームで使う左右 (右が正) と上下 (上が正)。取り付けの向きで入れ替える (JOY_SWAP_XY)
 float stickX() { return JOY_SWAP_XY ? ay.v : ax.v; }
@@ -81,7 +119,7 @@ void pollInput()
   ay.read();
   kSw1.set(digitalRead(SW1_PIN) == LOW);
   kSw2.set(digitalRead(SW2_PIN) == LOW);
-  kSw3.set(digitalRead(SW3_PIN) == LOW);
+  kSw3Hold.set(digitalRead(SW3_PIN) == LOW);
   kStick.set(digitalRead(JOY_SW_PIN) == LOW);
   kRight.set(stickX() >= DIR_ON);
   kLeft.set(stickX() <= -DIR_ON);
@@ -104,7 +142,8 @@ Input readInput()
   inp.FirePressed = kSw1.take();
   bool sw2 = kSw2.take();
   inp.BombPressed = inp.BackPressed = inp.QuitPressed = sw2;
-  inp.PausePressed = kSw3.take();
+  inp.PausePressed = kSw3Hold.takeHold();
+  inp.VolumePressed = kSw3Hold.takeTap();
   inp.UpPressed = kUp.take();
   inp.DownPressed = kDown.take();
   inp.LeftPressed = kLeft.take();
@@ -144,12 +183,12 @@ void loadPrefs()
   String n = prefs.isKey("name") ? prefs.getString("name", "AAA") : String("AAA");
   strncpy(game->LastName, n.c_str(), 3);
   game->LastName[3] = 0;
-  game->VolumeLevel = prefs.getInt("vol", 2);
+  game->VolumeLevel = min(max((int)prefs.getInt("vol5", 2), 0), Game::VOL_LEVELS - 1); // 4 段階のころの "vol" は使わない
 }
 
 void applyVolume()
 {
-  static const float MASTER[] = {0, 0.3f, 0.6f, 1.0f}; // OFF / LOW / MID / HIGH
+  static const float MASTER[Game::VOL_LEVELS] = {0, 0.12f, 0.25f, 0.5f, 1.0f}; // OFF / 1〜4 (1 段ごとにおよそ倍)
   snd.Muted = game->VolumeLevel == 0;
   snd.Master = MASTER[game->VolumeLevel];
 }
@@ -375,7 +414,7 @@ void loop()
   {
     game->VolumeChanged = false;
     applyVolume();
-    prefs.putInt("vol", game->VolumeLevel);
+    prefs.putInt("vol5", game->VolumeLevel);
   }
   drawFrame();
   if (millis() - lastLog >= 5000 && frames > 0)
