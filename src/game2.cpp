@@ -1,4 +1,4 @@
-// 2 本目 (廃工場の多脚戦車)。動きはデザイン案のページ (foundry-design.html) と同じ
+// 2 本目 (廃工場の多脚戦車)。動きはデザイン案のページ (foundry-design.html) と同じ。遊びの流れは SKYLARK (game.cpp) にそろえる
 #include "game2.h"
 #include "g2bg.h"
 #include "g2draw.h"
@@ -12,6 +12,8 @@ static const float HIPS[6][2] = {{-8, -8}, {8, -8}, {-10, 0}, {10, 0}, {-8, 8}, 
 static const float REST[6][2] = {{-19, -18}, {19, -18}, {-23, 1}, {23, 1}, {-19, 18}, {19, 18}};
 static const int GRP[6] = {0, 1, 1, 0, 0, 1}; // 0: 左前・右中・左後 / 1: 右前・左中・右後 (3 本ずつ交互に上げる)
 static const uint32_t RED = 0xff3b2a;
+static const char *LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-! ";
+static const int ENTER_FRAMES = 40, INV_FRAMES = 100, DEAD_FRAMES = 50;
 
 static float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : v; }
 
@@ -20,7 +22,7 @@ bool Game2::begin()
   uint32_t t0 = millis();
   bool ok = bg2::build();
   buildMs = millis() - t0;
-  initFeet();
+  startDemo();
   return ok;
 }
 
@@ -31,15 +33,310 @@ void Game2::initFeet()
     feet[i] = {tx + REST[i][0], ty - sc + REST[i][1], 0, 0, -1};
 }
 
-// ---- 動き ----
+// ---- 流れ ----
+void Game2::resetWorld()
+{
+  scroll = 0;
+  t = 0;
+  shots.clear();
+  eb.clear();
+  en.clear();
+  fx.clear();
+  lastZone = -1;
+  bannerT = 0;
+  extendT = 0;
+  deadT = invT = enterT = 0;
+  fireCool = 0;
+  ang = -PIf / 2;
+}
+
+void Game2::startDemo()
+{
+  mode = Mode::Attract;
+  modeT = 0;
+  paused = false;
+  resetWorld();
+  score = 0;
+  tankOn = true;
+  tx = W / 2;
+  ty = 240;
+  initFeet();
+}
+
+void Game2::newGame()
+{
+  mode = Mode::Play;
+  paused = false;
+  resetWorld();
+  score = 0;
+  lives = 2;
+  nextExtend = 40000;
+  continues = 0;
+  enterTank();
+}
+
+void Game2::enterTank()
+{
+  tankOn = true;
+  tx = W / 2;
+  ty = H + 30;
+  enterT = ENTER_FRAMES;
+  invT = ENTER_FRAMES + INV_FRAMES;
+  ang = -PIf / 2;
+  eb.clear();
+  initFeet();
+}
+
+void Game2::killTank()
+{
+  tankOn = false;
+  deadT = DEAD_FRAMES;
+  fx.push_back({2, tx, ty, hs(t) * 6, 0, 40, true});
+  for (int i = 0; i < 4; i++)
+    fx.push_back({0, tx + (hs(t + i) - 0.5f) * 30, ty + (hs(t * 2 + i) - 0.5f) * 26, hs(t + i * 3) * 6, -i * 5, 26, true});
+}
+
+void Game2::endGame()
+{
+  mode = Mode::GameOver;
+  modeT = 4 * FPS;
+  tankOn = false;
+}
+
+int Game2::rankOf(int s) const
+{
+  for (int i = 0; i < 5; i++)
+    if (s > Table[i].Score)
+      return i;
+  return -1;
+}
+
+// 名前の 3 文字: 上下で文字を選び、SW1 で決めて次の文字へ (左か SW2 で戻る)
+void Game2::stepEntry(const Input &in)
+{
+  if (--modeT <= 0)
+  {
+    finishEntry();
+    return;
+  }
+  int dir = 0;
+  if (in.UpPressed)
+    dir = 1;
+  else if (in.DownPressed)
+    dir = -1;
+  else if (in.Up || in.Down)
+  {
+    if (++entryRepeat > 8 && entryRepeat % 3 == 0)
+      dir = in.Up ? 1 : -1;
+  }
+  if (!in.Up && !in.Down)
+    entryRepeat = 0;
+  if (dir != 0)
+  {
+    int n = strlen(LETTERS), k = strchr(LETTERS, entry[entryPos]) - LETTERS;
+    entry[entryPos] = LETTERS[(k + dir + n) % n];
+  }
+  if (in.LeftPressed || in.BackPressed)
+    entryPos = max(0, entryPos - 1);
+  if (in.RightPressed && entryPos < 2)
+    entryPos++;
+  if (in.FirePressed)
+  {
+    if (entryPos < 2)
+      entryPos++;
+    else
+      finishEntry();
+  }
+}
+
+void Game2::finishEntry()
+{
+  char name[4];
+  memcpy(name, entry, 4);
+  for (int i = 2; i >= 0 && name[i] == ' '; i--)
+    name[i] = 0;
+  if (!name[0])
+    strcpy(name, "---");
+  memcpy(LastName, entry, 4);
+  int i = rankOf(score);
+  if (i >= 0)
+  {
+    for (int j = 4; j > i; j--)
+      Table[j] = Table[j - 1];
+    Table[i].Score = score;
+    memcpy(Table[i].Name, name, 4);
+    newRank = i;
+    if (TableChanged)
+      TableChanged();
+  }
+  mode = Mode::Ranking;
+  modeT = 8 * FPS;
+}
+
 void Game2::Step(const Input &in)
+{
+  switch (mode)
+  {
+  case Mode::Attract:
+    if (in.PausePressed)
+    {
+      WantMenu = true;
+      return;
+    }
+    if (in.FirePressed || in.StartPressed)
+    {
+      newGame();
+      return;
+    }
+    modeT++;
+    stepWorld(nullptr);
+    break;
+  case Mode::Play:
+    if (in.PausePressed || (paused && in.VolumePressed)) // 長押しで止める。止めているあいだは短く押しても戻る
+      paused = !paused;
+    if (paused)
+    {
+      if (in.QuitPressed)
+        startDemo();
+      return;
+    }
+    stepWorld(&in);
+    break;
+  case Mode::Continue:
+    if (in.FirePressed || in.StartPressed)
+    {
+      mode = Mode::Play;
+      lives = 2;
+      continues++;
+      if (score % 10 < 9) // 点のいちばん下の桁は、コンティニューした回数
+        score++;
+      enterTank();
+      return;
+    }
+    if (in.PausePressed || in.QuitPressed) // やめる
+      modeT = 1;
+    if (--modeT <= 0)
+      endGame();
+    break;
+  case Mode::GameOver:
+    stepWorld(nullptr);
+    if (--modeT <= 0 || (modeT < 3 * FPS && (in.FirePressed || in.StartPressed)))
+    {
+      if (rankOf(score) >= 0)
+      {
+        mode = Mode::NameEntry;
+        modeT = 40 * FPS;
+        for (int i = 0; i < 3; i++)
+          entry[i] = LastName[i] && strchr(LETTERS, LastName[i]) ? LastName[i] : 'A';
+        entry[3] = 0;
+        entryPos = 0;
+      }
+      else
+      {
+        mode = Mode::Ranking;
+        newRank = -1;
+        modeT = 6 * FPS;
+      }
+    }
+    break;
+  case Mode::NameEntry:
+    stepWorld(nullptr);
+    stepEntry(in);
+    break;
+  case Mode::Ranking:
+    stepWorld(nullptr);
+    if (--modeT <= 0 || (modeT < 7 * FPS && (in.FirePressed || in.StartPressed)))
+      startDemo();
+    break;
+  }
+}
+
+// 世界を 1 フレーム進める。戦車は、遊んでいるときは in で、デモでは自動で動かす
+void Game2::stepWorld(const Input *in)
 {
   t++;
   scroll += SPEED;
-  int sc = (int)scroll;
+  if (tankOn)
+  {
+    if (mode == Mode::Attract)
+    {
+      float gx = 120 + 48 * sinf(t * 0.011f) + 14 * sinf(t * 0.029f), gy = 236 + 12 * sinf(t * 0.017f);
+      stepTank(clampf((gx - tx) / 2, -1, 1), clampf((gy - ty) / 2, -1, 1), true, false);
+    }
+    else if (enterT > 0)
+    {
+      enterT--;
+      stepTank(0, -1, false, false);
+    }
+    else if (in)
+      stepTank(in->AX, in->AY, in->Fire, in->Slow);
+    else
+      stepTank(0, 0, false, false);
+  }
+  if (invT > 0)
+    invT--;
+  if (deadT > 0 && --deadT == 0 && mode == Mode::Play)
+  {
+    if (lives > 0)
+    {
+      lives--;
+      enterTank();
+    }
+    else
+    {
+      mode = Mode::Continue;
+      modeT = 10 * FPS - 1;
+    }
+  }
 
-  float sp = in.Slow ? 1.0f : 2.0f;
-  float ntx = clampf(tx + in.AX * sp, 26, W - 26), nty = clampf(ty + in.AY * sp, 110, H - 24);
+  enemyStep();
+
+  if (mode == Mode::Play && tankOn && invT == 0)
+  {
+    bool hit = false;
+    for (auto &b : eb)
+      if (!b.dead && fabsf(b.x - tx) < 5 && fabsf(b.y - ty) < 7)
+      {
+        b.dead = true;
+        hit = true;
+      }
+    for (auto &e : en)
+      if (e.k == 1 && fabsf(e.x - tx) < 14 && fabsf(e.y - ty) < 14)
+        hit = true;
+    if (hit)
+      killTank();
+  }
+  if (mode == Mode::Play && score >= nextExtend)
+  {
+    lives++;
+    nextExtend += 60000;
+    extendT = 2 * FPS;
+  }
+  if (extendT > 0)
+    extendT--;
+  int z = zoneAt(H / 2);
+  if (z != lastZone)
+  {
+    lastZone = z;
+    if (mode == Mode::Play)
+    {
+      bannerZone = z;
+      bannerT = 3 * FPS;
+    }
+  }
+  if (bannerT > 0)
+    bannerT--;
+  eb.erase(std::remove_if(eb.begin(), eb.end(), [](const Shot &s) { return s.dead; }), eb.end());
+  shots.erase(std::remove_if(shots.begin(), shots.end(), [](const Shot &s) { return s.dead; }), shots.end());
+}
+
+void Game2::stepTank(float ax, float ay, bool fire, bool slow)
+{
+  int sc = (int)scroll;
+  float sp = slow ? 1.0f : 2.0f;
+  float ntx = clampf(tx + ax * sp, 26, W - 26), nty = ty + ay * sp;
+  if (enterT == 0)
+    nty = clampf(nty, 110, H - 24);
   float vx = ntx - tx, vy = nty - ty - SPEED;
   tx = ntx;
   ty = nty;
@@ -100,7 +397,7 @@ void Game2::Step(const Input &in)
 
   if (fireCool > 0)
     fireCool--;
-  if (in.Fire && fireCool == 0)
+  if (fire && fireCool == 0 && ty < H - 10)
   {
     float dx = cosf(ang), dy = sinf(ang);
     for (float s : {-2.5f, 2.5f})
@@ -109,27 +406,6 @@ void Game2::Step(const Input &in)
     fireCool = 6;
   }
   rec = max(0.0f, rec - 0.6f);
-  for (auto &b : shots)
-  {
-    b.x += b.dx;
-    b.y += b.dy;
-    if (b.y < -10 || b.x < -10 || b.x > W + 10)
-      b.dead = true;
-  }
-
-  enemyStep();
-
-  for (auto &b : eb)
-    if (!b.dead && fabsf(b.x - tx) < 5 && fabsf(b.y - ty) < 7)
-    {
-      b.dead = true;
-      hits++;
-      hitFlash = 12;
-    }
-  if (hitFlash > 0)
-    hitFlash--;
-  eb.erase(std::remove_if(eb.begin(), eb.end(), [](const Shot &s) { return s.dead; }), eb.end());
-  shots.erase(std::remove_if(shots.begin(), shots.end(), [](const Shot &s) { return s.dead; }), shots.end());
 }
 
 void Game2::enemyStep()
@@ -139,6 +415,13 @@ void Game2::enemyStep()
     en.push_back({0, 30 + hs(t) * 180, 0, -16, 0, 3, t, 0, false});
   if (t % 140 == 50)
     en.push_back({1, 0, 40 + hs(t * 2.1f) * 160, -16, -16.0f - sc, 5, t, 0, false});
+  for (auto &b : shots)
+  {
+    b.x += b.dx;
+    b.y += b.dy;
+    if (b.y < -10 || b.x < -10 || b.x > W + 10)
+      b.dead = true;
+  }
   for (auto &e : en)
   {
     int age = t - e.t0;
@@ -157,7 +440,7 @@ void Game2::enemyStep()
     if (e.hit)
       e.hit--;
     bool fire = e.k == 0 ? age % 70 == 30 : age % 120 == 80;
-    if (fire && e.y > 0 && e.y < H - 60)
+    if (fire && tankOn && enterT == 0 && e.y > 0 && e.y < H - 60)
     {
       float a0 = atan2f(ty - e.y, tx - e.x), s = 2;
       if (e.k == 0)
@@ -180,7 +463,8 @@ void Game2::enemyStep()
         e.hit = 3;
         if (e.hp <= 0)
         {
-          score += e.k == 0 ? 100 : 200;
+          if (mode == Mode::Play)
+            score += e.k == 0 ? 100 : 200;
           fx.push_back({0, e.x, e.y, hs(t) * 6, 0, 26, e.k == 1});
           fx.push_back({1, e.x, e.y, hs(t + 1) * 6, 0, 40, false});
         }
@@ -394,6 +678,35 @@ static void drawFx(int k, float x, float y, float s, int t, int life)
   }
 }
 
+
+// 戦車がやられたときの大きな爆発 (脚の破片が飛ぶ)
+static void drawBigBoom(float x, float y, float s, int t, int life)
+{
+  float q = (float)t / life;
+  C(x, y, 8 + q * 26, 0xff8c28, (int)(120 * (1 - q)));
+  if (q < 0.5f)
+  {
+    float k = 1 - q / 0.5f;
+    C(x, y, 6 + 16 * k, 0xff7a1f);
+    C(x - 1, y - 2, 4 + 11 * k, 0xffc23e);
+    C(x - 2, y - 3, 2 + 6 * k, 0xfff6d0);
+  }
+  if (q > 0.3f)
+    for (int i = 0; i < 3; i++)
+      C(x + (i - 1) * 8, y - q * 24 - i * 3, 5 + q * 12, 0x3c3832, (int)(120 * (1 - q)));
+  for (int i = 0; i < 6; i++) // 脚の破片
+  {
+    float an = i * 1.047f + s, d = 6 + q * 40;
+    float px = x + cosf(an) * d, py = y + sinf(an) * d * 0.8f;
+    LT(px, py, px + cosf(an + q * 6) * 5, py + sinf(an + q * 6) * 5, 2, 0x55585b);
+  }
+  for (int i = 0; i < 16; i++)
+  {
+    float an = i * 0.39f + s, d = 4 + q * 34 * (0.5f + hs(i + s) * 0.7f);
+    P(x + cosf(an) * d, y + sinf(an) * d, i % 3 ? 0xffd25a : 0xff5a1f);
+  }
+}
+
 int Game2::zoneAt(int sy) const
 {
   int sc = (int)scroll;
@@ -451,7 +764,8 @@ void Game2::Draw(Gfx &gx)
       R(b.x - 1, b.y - 4, 3, 9, 0x3a7bff);
       R(b.x, b.y - 4, 1, 8, 0xe0f0ff);
     }
-  if (ty > ltop - 40 && ty < ltop + LSTRIP + 40 && !(hitFlash & 2))
+  bool blink = invT > 0 && enterT == 0 && (t & 2); // 入り直したあとの点滅
+  if (tankOn && !blink && ty > ltop - 40 && ty < ltop + LSTRIP + 40)
   {
     float fxs[6], fys[6], lift[6];
     for (int i = 0; i < 6; i++)
@@ -481,22 +795,167 @@ void Game2::Draw(Gfx &gx)
     if (e.k == 0 && e.y > ltop - 30 && e.y < ltop + LSTRIP + 30)
       drawTwin(e.x, e.y, t, e.hit > 0);
   for (auto &f : fx)
-    if (f.y > ltop - 60 && f.y < ltop + LSTRIP + 40)
-      drawFx(f.k, f.x, f.y, f.s, f.t, f.life);
+    if (f.t >= 0 && f.y > ltop - 70 && f.y < ltop + LSTRIP + 50)
+    {
+      if (f.k == 2)
+        drawBigBoom(f.x, f.y, f.s, f.t, f.life);
+      else
+        drawFx(f.k, f.x, f.y, f.s, f.t, f.life);
+    }
   for (auto &b : eb)
     if (b.y > ltop - 6 && b.y < ltop + LSTRIP + 6)
       eShot(b.x, b.y, b.dx, b.dy);
-  // 点数と区画の名前
-  char buf[32];
-  snprintf(buf, sizeof(buf), "%07d", score);
-  gx.text(6, 6, 0xF2F0E8, buf, Datum::TL, 1, 1, 0x000000);
-  snprintf(buf, sizeof(buf), "HIT %d", hits);
-  gx.text(6, 22, 0xFF6A5A, buf, Datum::TL, 1, 1, 0x000000);
-  const char *zn = bg2::ZONES[zoneAt(H / 2)].name;
-  gx.text(354 - Gfx::textWidth(zn, 1), 6, 0xC9A227, zn, Datum::TL, 1, 1, 0x000000);
+  drawOverlay(gx, ltop);
   uint32_t t5 = micros();
   profBg += t1 - t0;
   profAnim += t2 - t1;
   profObj += (t3 - t2) + (t5 - t4);
   profFore += t4 - t3;
+}
+
+// ---- 文字と枠 ----
+static const uint32_t INK = 0x000000, CREAM = 0xF2F0E8, GOLD = 0xC9A227, REDT = 0xFF6A5A, MUTE = 0x9A958A;
+// 液晶の座標で文字を書く。size は 1 (6x8)・3 (12x16)・5 (18x24)。center なら x が真ん中
+static void txt(Gfx &g, int lx, int ly, uint32_t c, const char *s, bool center = false, int size = 1)
+{
+  g.text(lx * 3 / 2, ly * 3 / 2, c, s, center ? Datum::TC : Datum::TL, size, 1, INK);
+}
+static void panel(int x, int y, int w, int h)
+{
+  R(x, y, w, h, 0x0c0b0a, 190);
+  R(x, y, w, 1, 0x8a4f28);
+  R(x, y + h - 1, w, 1, 0x8a4f28);
+  R(x, y, 1, h, 0x6b3a1e);
+  R(x + w - 1, y, 1, h, 0x6b3a1e);
+  for (int i = 0; i < w; i += 8) // 上の縁に黄色と黒のすじ
+    R(x + i, y + 2, 4, 2, GOLD);
+}
+static void lifeIcon(int x, int y)
+{
+  for (int s : {-1, 1})
+  {
+    L(x + s * 2, y + 1, x + s * 5, y - 2, 0x6b7075);
+    L(x + s * 2, y + 4, x + s * 5, y + 7, 0x6b7075);
+  }
+  R(x - 2, y - 1, 5, 8, 0x8a8f94);
+  R(x - 2, y - 1, 1, 8, 0xd8dcdf);
+  C(x, y + 2, 1, 0x6ab8ff);
+}
+
+void Game2::drawOverlay(Gfx &g, int ltop)
+{
+  char s[40];
+  bool playing = mode == Mode::Play || mode == Mode::Continue;
+  // 上の点数
+  if (mode != Mode::Attract)
+  {
+    if (!playing || (t / 16) % 2)
+      txt(g, 4, 2, GOLD, "1UP");
+    snprintf(s, sizeof(s), "%07d", score);
+    txt(g, 4, 11, CREAM, s);
+  }
+  txt(g, W / 2 + 8, 2, GOLD, "HI-SCORE", true);
+  snprintf(s, sizeof(s), "%07d", max(score, Table[0].Score));
+  txt(g, W / 2 + 8, 11, CREAM, s, true);
+  if (mode != Mode::Attract)
+  {
+    const char *zn = bg2::ZONES[lastZone < 0 ? 0 : lastZone].name;
+    txt(g, W - 4 - (int)strlen(zn) * 6, 2, GOLD, zn);
+    snprintf(s, sizeof(s), "ZONE %d", (lastZone < 0 ? 0 : lastZone) + 1);
+    txt(g, W - 4 - (int)strlen(s) * 6, 11, MUTE, s);
+  }
+  // 残機
+  if (playing && ltop + LSTRIP > 300)
+    for (int i = 0; i < min(lives, 8); i++)
+      lifeIcon(10 + i * 13, 308);
+
+  switch (mode)
+  {
+  case Mode::Attract:
+    if ((modeT / (8 * FPS)) % 2 == 0)
+    {
+      panel(20, 70, 200, 154);
+      txt(g, W / 2, 86, GOLD, "FOUNDRY", true, 5);
+      txt(g, W / 2, 116, CREAM, "HEXAPOD TANK", true);
+      txt(g, W / 2, 132, MUTE, "THE MACHINES WANT TO LIVE", true);
+      if ((modeT / 15) % 2 == 0)
+        txt(g, W / 2, 158, CREAM, "PUSH SW1", true, 3);
+      txt(g, W / 2, 210, MUTE, "SW3 HOLD: MENU", true);
+    }
+    else
+    {
+      panel(30, 70, 180, 150);
+      txt(g, W / 2, 84, GOLD, "BEST 5", true, 3);
+      static const char *ORD[5] = {"1ST", "2ND", "3RD", "4TH", "5TH"};
+      for (int i = 0; i < 5; i++)
+      {
+        snprintf(s, sizeof(s), "%s %07d %-3s", ORD[i], Table[i].Score, Table[i].Name);
+        txt(g, W / 2, 112 + i * 20, i == 0 ? GOLD : CREAM, s, true);
+      }
+    }
+    break;
+  case Mode::Play:
+    if (bannerT > 0 && bannerT < 3 * FPS - 6)
+    {
+      panel(30, 120, 180, 44);
+      snprintf(s, sizeof(s), "ZONE %d", bannerZone + 1);
+      txt(g, W / 2, 128, GOLD, s, true);
+      txt(g, W / 2, 142, CREAM, bg2::ZONES[bannerZone].name, true, 3);
+    }
+    if (extendT > 0 && (extendT / 6) % 2)
+      txt(g, W / 2, 180, GOLD, "EXTEND!", true, 3);
+    if (paused)
+    {
+      panel(40, 120, 160, 64);
+      txt(g, W / 2, 132, CREAM, "PAUSE", true, 3);
+      txt(g, W / 2, 158, MUTE, "SW3: RESUME", true);
+      txt(g, W / 2, 170, MUTE, "SW2: QUIT", true);
+    }
+    break;
+  case Mode::Continue:
+    panel(40, 110, 160, 90);
+    txt(g, W / 2, 122, CREAM, "CONTINUE?", true, 3);
+    snprintf(s, sizeof(s), "%d", modeT / FPS);
+    txt(g, W / 2, 146, GOLD, s, true, 5);
+    txt(g, W / 2, 182, MUTE, "SW1: CONTINUE", true);
+    break;
+  case Mode::GameOver:
+    txt(g, W / 2, 140, REDT, "GAME OVER", true, 5);
+    break;
+  case Mode::NameEntry:
+  {
+    panel(30, 90, 180, 120);
+    txt(g, W / 2, 102, GOLD, "NEW RECORD", true, 3);
+    snprintf(s, sizeof(s), "SCORE %07d", score);
+    txt(g, W / 2, 124, CREAM, s, true);
+    for (int i = 0; i < 3; i++)
+    {
+      char c[2] = {entry[i], 0};
+      int x = W / 2 - 30 + i * 22;
+      txt(g, x, 146, i == entryPos ? GOLD : CREAM, c, true, 5);
+      if (i == entryPos && (t / 8) % 2)
+        R(x - 8, 172, 16, 2, GOLD);
+    }
+    txt(g, W / 2, 186, MUTE, "STICK: LETTER  SW1: OK", true);
+    snprintf(s, sizeof(s), "%d", modeT / FPS);
+    txt(g, 200, 100, MUTE, s);
+    break;
+  }
+  case Mode::Ranking:
+  {
+    panel(30, 70, 180, 160);
+    txt(g, W / 2, 84, GOLD, "BEST 5", true, 3);
+    static const char *ORD[5] = {"1ST", "2ND", "3RD", "4TH", "5TH"};
+    for (int i = 0; i < 5; i++)
+    {
+      snprintf(s, sizeof(s), "%s %07d %-3s", ORD[i], Table[i].Score, Table[i].Name);
+      bool mine = i == newRank;
+      if (!mine || (t / 8) % 2)
+        txt(g, W / 2, 112 + i * 20, mine ? REDT : i == 0 ? GOLD : CREAM, s, true);
+    }
+    snprintf(s, sizeof(s), "YOUR SCORE %07d", score);
+    txt(g, W / 2, 214, MUTE, s, true);
+    break;
+  }
+  }
 }

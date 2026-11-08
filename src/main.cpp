@@ -189,6 +189,44 @@ void loadPrefs()
   game->VolumeLevel = min(max((int)prefs.getInt("vol5", 2), 0), Game::VOL_LEVELS - 1); // 4 段階のころの "vol" は使わない
 }
 
+// 2 本目のランキングと名前は、別の名前空間 (foundry) に残す
+Preferences prefs2;
+void saveTable2()
+{
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    prefs2.putInt(k, game2->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    prefs2.putString(k, game2->Table[i].Name);
+  }
+  prefs2.putString("name", game2->LastName);
+}
+
+void loadPrefs2()
+{
+  prefs2.begin("foundry", false);
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    if (!prefs2.isKey(k))
+      continue;
+    game2->Table[i].Score = prefs2.getInt(k, game2->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    String n = prefs2.getString(k, game2->Table[i].Name);
+    strncpy(game2->Table[i].Name, n.c_str(), 3);
+    game2->Table[i].Name[3] = 0;
+  }
+  if (prefs2.isKey("name"))
+  {
+    String n = prefs2.getString("name", "AAA");
+    strncpy(game2->LastName, n.c_str(), 3);
+    game2->LastName[3] = 0;
+  }
+}
+
 void applyVolume()
 {
   static const float MASTER[Game::VOL_LEVELS] = {0, 0.12f, 0.25f, 0.5f, 1.0f}; // OFF / 1〜4 (1 段ごとにおよそ倍)
@@ -235,6 +273,8 @@ void serialCommands()
     int c = Serial.read();
     if (c == 's')
       snapshot = true;
+    else if (c == 'n')
+      kSw1.hit = true;
     else if (!game)
       continue;
     else if (c == 'f')
@@ -243,8 +283,6 @@ void serialCommands()
       for (int i = 0; i < 10 * Game::FPS; i++)
         game->Step(none);
     }
-    else if (c == 'n')
-      kSw1.hit = true;
     else if (c == 'm') // 母船が来る直前へ
       game->frame = Game::MOM_AT - 2 * Game::FPS;
   }
@@ -401,6 +439,8 @@ void setup()
     game2 = new Game2();
     if (!game2->begin())
       Serial.println("game2 begin failed (psram)");
+    loadPrefs2();
+    game2->TableChanged = saveTable2;
     Serial.printf("game2 bg built in %lu ms  heap %u  psram %u\n", game2->buildMs, ESP.getFreeHeap(), ESP.getFreePsram());
     return;
   }
@@ -425,7 +465,7 @@ void setup()
   Serial.printf("heap %u  psram %u\n", ESP.getFreeHeap(), ESP.getFreePsram());
 }
 
-// 2 本目: 1 秒 30 回進めて描く。SW3 を長く押すと選択画面へ戻る (再起動)
+// 2 本目: 1 秒 30 回進めて描く。デモの画面で SW3 を長く押すと選択画面へ戻る (再起動)
 void loop2()
 {
   static uint32_t next = millis();
@@ -439,10 +479,9 @@ void loop2()
   while ((int32_t)(now - next) >= 0 && n < 2)
   {
     uint32_t t0 = micros();
-    Input in = readInput();
-    if (in.PausePressed)
+    game2->Step(readInput());
+    if (game2->WantMenu)
       ESP.restart();
-    game2->Step(in);
     stepUs += micros() - t0;
     next += 1000 / Game2::FPS + ((next % 3) == 0 ? 1 : 0);
     n++;
