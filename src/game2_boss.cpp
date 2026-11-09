@@ -411,7 +411,9 @@ bool Game2::bossShot(float x, float y)
       bossHurt(0, 1);
       return true;
     }
-    if (fabsf(x - B.x) < 34 && y > B.y - 20 - B.elev - 14 && y < B.y + 22)
+    // ヘッドが下りているときは、ヘッドが核を覆っていて弾をはじく。上がっているときは弾が体の上を越えて核に届く
+    float hy = B.y - 20 - B.elev;
+    if (B.elev <= 14 && fabsf(x - B.x) < 32 && y > hy - 14 && y < hy + 28)
     {
       spark();
       return true;
@@ -429,13 +431,13 @@ bool Game2::bossShot(float x, float y)
         return true;
       }
     }
-  if (hypotf(x - B.x, y - B.y) < 46)
+  // 弾は炉の上を越えて飛ぶ。真ん中の目に届いたら当たる (まばたきしているあいだは、はじく)
+  if (hypotf(x - bossEyeX(), y - bossEyeY()) < 11)
   {
-    bool shut = (B.t % 140) < 6;
-    if (!shut && hypotf(x - bossEyeX(), y - bossEyeY()) < 10)
-      bossHurt(0, 1);
-    else
+    if ((B.t % 140) < 6)
       spark();
+    else
+      bossHurt(0, 1);
     return true;
   }
   return false;
