@@ -13,9 +13,12 @@ static const float REST[6][2] = {{-19, -18}, {19, -18}, {-23, 1}, {23, 1}, {-19,
 static const int GRP[6] = {0, 1, 1, 0, 0, 1}; // 0: 左前・右中・左後 / 1: 右前・左中・右後 (3 本ずつ交互に上げる)
 static const uint32_t RED = 0xff3b2a;
 static const char *LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-! ";
+static const int BOMB_FLIGHT = 18, BOMB_COOL = 40; // 爆弾が飛んでいる時間、次に投げられるまで
+static const float BOMB_RANGE = 80;               // 戦車からどれだけ先に落ちるか
 static const int ENTER_FRAMES = 40, INV_FRAMES = 100, DEAD_FRAMES = 50;
 
 static float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : v; }
+void drawEShot(int k, float x, float y, float dx, float dy, int life, int t); // game2_enemy.cpp
 
 bool Game2::begin()
 {
@@ -48,6 +51,14 @@ void Game2::resetWorld()
   deadT = invT = enterT = 0;
   fireCool = 0;
   ang = -PIf / 2;
+  pendingLvl = 0;
+  resetSpawns(true);
+  items.clear();
+  bombOn = false;
+  bombCool = 0;
+  shotLv = 0;
+  killCount = 0;
+  powT = 0;
 }
 
 void Game2::startDemo()
@@ -91,6 +102,7 @@ void Game2::killTank()
 {
   tankOn = false;
   deadT = DEAD_FRAMES;
+  shotLv = max(0, shotLv - 1); // 弾の強さは 1 段下がる
   fx.push_back({2, tx, ty, hs(t) * 6, 0, 40, true});
   for (int i = 0; i < 4; i++)
     fx.push_back({0, tx + (hs(t + i) - 0.5f) * 30, ty + (hs(t * 2 + i) - 0.5f) * 26, hs(t + i * 3) * 6, -i * 5, 26, true});
@@ -258,7 +270,7 @@ void Game2::stepWorld(const Input *in)
   scroll += SPEED;
   if (tankOn)
   {
-    if (mode == Mode::Attract)
+    if (mode == Mode::Attract || (autoPilot && mode == Mode::Play && enterT == 0))
     {
       float gx = 120 + 48 * sinf(t * 0.011f) + 14 * sinf(t * 0.029f), gy = 236 + 12 * sinf(t * 0.017f);
       stepTank(clampf((gx - tx) / 2, -1, 1), clampf((gy - ty) / 2, -1, 1), true, false);
@@ -272,6 +284,18 @@ void Game2::stepWorld(const Input *in)
       stepTank(in->AX, in->AY, in->Fire, in->Slow);
     else
       stepTank(0, 0, false, false);
+    bool wantBomb = (in && in->BombPressed) || (autoPilot && t % 50 == 0);
+    if (wantBomb && mode == Mode::Play && enterT == 0 && !bombOn && bombCool == 0) // 爆弾を投げる
+    {
+      int sc = (int)scroll;
+      bombOn = true;
+      bombT = 0;
+      bombCool = BOMB_COOL;
+      bombX0 = tx;
+      bombG0 = ty - 6 - sc;
+      bombX1 = clampf(tx + cosf(ang) * BOMB_RANGE, 12, W - 12);
+      bombG1 = ty + sinf(ang) * BOMB_RANGE - sc;
+    }
   }
   if (invT > 0)
     invT--;
@@ -291,17 +315,20 @@ void Game2::stepWorld(const Input *in)
 
   enemyStep();
 
-  if (mode == Mode::Play && tankOn && invT == 0)
+  if (mode == Mode::Play && tankOn && invT == 0 && !autoPilot)
   {
     bool hit = false;
     for (auto &b : eb)
-      if (!b.dead && fabsf(b.x - tx) < 5 && fabsf(b.y - ty) < 7)
+      if (!b.dead && b.k != 3 && fabsf(b.x - tx) < 5 && fabsf(b.y - ty) < 7)
       {
         b.dead = true;
         hit = true;
       }
+    for (auto &b : eb)
+      if (!b.dead && b.k == 3 && hypotf(b.x - tx, b.y - ty) < 9)
+        hit = true;
     for (auto &e : en)
-      if (e.k == 1 && fabsf(e.x - tx) < 14 && fabsf(e.y - ty) < 14)
+      if (touchesTank(e))
         hit = true;
     if (hit)
       killTank();
@@ -314,6 +341,33 @@ void Game2::stepWorld(const Input *in)
   }
   if (extendT > 0)
     extendT--;
+  if (powT > 0)
+    powT--;
+  if (bombCool > 0)
+    bombCool--;
+  if (bombOn && ++bombT >= BOMB_FLIGHT)
+  {
+    bombOn = false;
+    bombBlast(bombX1, bombG1 + (int)scroll);
+  }
+  for (auto &it : items) // 部品は少しゆれながら流れてくる。戦車が触れたら拾う
+  {
+    it.t++;
+    it.y += 0.7f;
+    it.x += sinf(it.t * 0.06f) * 0.4f;
+    if (tankOn && enterT == 0 && hypotf(it.x - tx, it.y - ty) < 16)
+    {
+      it.y = H + 100;
+      if (shotLv < 3)
+      {
+        shotLv++;
+        powT = 2 * FPS;
+      }
+      else if (mode == Mode::Play)
+        score += 1000;
+    }
+  }
+  items.erase(std::remove_if(items.begin(), items.end(), [](const Item &i) { return i.y > H + 12; }), items.end());
   int z = zoneAt(H / 2);
   if (z != lastZone)
   {
@@ -381,7 +435,7 @@ void Game2::stepTank(float ax, float ay, bool fire, bool slow)
   float bd = 1e9f;
   for (auto &e : en)
   {
-    if (e.y > ty - 10 || e.y < 0)
+    if (e.hidden || e.y > ty - 10 || e.y < 0)
       continue;
     float d = hypotf(e.x - tx, e.y - ty);
     if (d < bd)
@@ -399,92 +453,20 @@ void Game2::stepTank(float ax, float ay, bool fire, bool slow)
     fireCool--;
   if (fire && fireCool == 0 && ty < H - 10)
   {
+    // 弾の強さ: 0 平行に 2 発 / 1 斜めに 2 発足す / 2 連射が速くなる / 3 さらに外側へ 2 発
     float dx = cosf(ang), dy = sinf(ang);
     for (float s : {-2.5f, 2.5f})
       shots.push_back({tx - dy * s + dx * 16, ty - 1 + dx * s + dy * 16, dx * 7, dy * 7, false});
+    if (shotLv >= 1)
+      for (float d : {-0.2f, 0.2f})
+        shots.push_back({tx + dx * 12, ty - 1 + dy * 12, cosf(ang + d) * 7, sinf(ang + d) * 7, false});
+    if (shotLv >= 3)
+      for (float d : {-0.42f, 0.42f})
+        shots.push_back({tx + dx * 10, ty - 1 + dy * 10, cosf(ang + d) * 7, sinf(ang + d) * 7, false});
     rec = 3;
-    fireCool = 6;
+    fireCool = shotLv >= 2 ? 4 : 6;
   }
   rec = max(0.0f, rec - 0.6f);
-}
-
-void Game2::enemyStep()
-{
-  int sc = (int)scroll;
-  if (t % 100 == 0) // 敵の出る間隔 (試作の仮の値)
-    en.push_back({0, 30 + hs(t) * 180, 0, -16, 0, 3, t, 0, false});
-  if (t % 140 == 50)
-    en.push_back({1, 0, 40 + hs(t * 2.1f) * 160, -16, -16.0f - sc, 5, t, 0, false});
-  for (auto &b : shots)
-  {
-    b.x += b.dx;
-    b.y += b.dy;
-    if (b.y < -10 || b.x < -10 || b.x > W + 10)
-      b.dead = true;
-  }
-  for (auto &e : en)
-  {
-    int age = t - e.t0;
-    if (e.k == 0)
-    {
-      e.y += 0.9f;
-      e.x = e.bx + 26 * sinf(age * 0.03f);
-    }
-    else
-    {
-      e.walking = age % 120 < 70;
-      if (e.walking)
-        e.wy += 0.35f;
-      e.y = e.wy + sc;
-    }
-    if (e.hit)
-      e.hit--;
-    bool fire = e.k == 0 ? age % 70 == 30 : age % 120 == 80;
-    if (fire && tankOn && enterT == 0 && e.y > 0 && e.y < H - 60)
-    {
-      float a0 = atan2f(ty - e.y, tx - e.x), s = 2;
-      if (e.k == 0)
-        for (float d : {-0.35f, 0.0f, 0.35f})
-          eb.push_back({e.x, e.y + 4, cosf(a0 + d) * s, sinf(a0 + d) * s, false});
-      else
-        for (float o : {-2.0f, 2.0f})
-          eb.push_back({e.x + o, e.y + 8, cosf(a0) * s, sinf(a0) * s, false});
-    }
-  }
-  for (auto &b : shots)
-    for (auto &e : en)
-    {
-      if (b.dead || e.hp <= 0)
-        continue;
-      if (fabsf(b.x - e.x) < 10 && fabsf(b.y - e.y) < 10)
-      {
-        b.dead = true;
-        e.hp--;
-        e.hit = 3;
-        if (e.hp <= 0)
-        {
-          if (mode == Mode::Play)
-            score += e.k == 0 ? 100 : 200;
-          fx.push_back({0, e.x, e.y, hs(t) * 6, 0, 26, e.k == 1});
-          fx.push_back({1, e.x, e.y, hs(t + 1) * 6, 0, 40, false});
-        }
-      }
-    }
-  en.erase(std::remove_if(en.begin(), en.end(), [](const Enemy &e) { return e.hp <= 0 || e.y > H + 30; }), en.end());
-  for (auto &b : eb)
-  {
-    b.x += b.dx;
-    b.y += b.dy;
-    if (b.y > H + 8 || b.y < -8 || b.x < -8 || b.x > W + 8)
-      b.dead = true;
-  }
-  for (auto &f : fx)
-  {
-    f.t++;
-    if (f.ground)
-      f.y += SPEED;
-  }
-  fx.erase(std::remove_if(fx.begin(), fx.end(), [](const Fx &f) { return f.t > f.life; }), fx.end());
 }
 
 // ---- 描く部品 (戦車・敵・弾) ----
@@ -570,77 +552,6 @@ static void drawTank(float cx, float cy, const float *fxs, const float *fys, con
   C(cx + dx * 5, ty + dy * 5, 1, 0x6ab8ff);
 }
 
-static void redEye(float x, float y, float r, bool hit)
-{
-  C(x, y, r + 2, 0xff3c28, 56);
-  C(x, y, r, hit ? 0xffffff : RED);
-  P(x, y, 0xffe0d8);
-}
-static void drawTwin(float x, float y, int t, bool hit)
-{
-  C(x + 9, y + 18, 7, 0, 71);
-  for (int s : {-1, 1})
-  {
-    float rx = x + s * 11;
-    LT(x + s * 3, y, rx, y, 2, 0x55585b);
-    C(rx, y, 7, 0xa0a0a0, 46);
-    CR(rx, y, 7, 0x8a8f94);
-    CR(rx, y, 6, 0x3a3d40);
-    for (int k = 0; k < 2; k++)
-    {
-      float a = t * 0.9f * s + k * PIf;
-      L(rx - cosf(a) * 6, y - sinf(a) * 6, rx + cosf(a) * 6, y + sinf(a) * 6, 0xc4c9cc);
-    }
-    C(rx, y, 1, 0x2a2c2e);
-  }
-  C(x, y + 1, 5, 0x2a2c2e);
-  C(x, y, 4, hit ? 0xc4c9cc : 0x6b7075);
-  C(x - 1, y - 1, 2, 0xa3a8ac);
-  R(x - 2, y - 6, 4, 3, 0x4a4e52);
-  redEye(x, y + 2, 2, hit);
-}
-static void drawWalker(float x, float y, int t, bool hit)
-{
-  C(x + 3, y + 4, 10, 0, 89);
-  static const int LEG[4][3] = {{-1, -1, 0}, {1, -1, 1}, {-1, 1, 1}, {1, 1, 0}};
-  for (auto &l : LEG)
-  {
-    float st = sinf(t * 0.2f + l[2] * PIf) * 2;
-    float hx = x + l[0] * 6, hy = y + l[1] * 4, kx = x + l[0] * 11, ky = y + l[1] * 4 - 3, fx = x + l[0] * 13, fy = y + l[1] * 10 + st;
-    LT(hx, hy, kx, ky, 3, 0x55585b);
-    L(hx, hy - 1, kx, ky - 1, 0x9aa0a5);
-    LT(kx, ky, fx, fy, 2, 0x2a2c2e);
-    C(kx, ky, 1, 0x8a8f94);
-    R(fx - 2, fy - 1, 4, 2, 0x1a1b1c);
-  }
-  R(x - 8, y - 8, 16, 15, hit ? 0xd8d0c0 : 0x8a7a62);
-  R(x - 8, y - 8, 16, 1, 0xc4b49a);
-  R(x - 8, y - 8, 1, 15, 0xa89880);
-  R(x + 7, y - 8, 1, 15, 0x4a3e30);
-  R(x - 8, y + 6, 16, 1, 0x4a3e30);
-  C(x + 4, y + 3, 2, 0x6b3a1e);
-  P(x - 5, y + 4, 0x8a4f28);
-  R(x - 6, y - 12, 12, 4, 0x5a5e62);
-  R(x - 6, y - 12, 12, 1, 0x8a8f94);
-  R(x - 4, y - 4, 8, 8, 0x4a4e52);
-  R(x - 4, y - 4, 8, 1, 0x7d8388);
-  R(x - 3, y + 3, 2, 7, 0x2a2c2e);
-  R(x + 1, y + 3, 2, 7, 0x2a2c2e);
-  redEye(x, y - 1, 2, hit);
-  L(x + 5, y - 8, x + 7, y - 14, 0x2a2c2e);
-  P(x + 7, y - 15, (t >> 3) & 1 ? RED : 0x7a1a10);
-}
-static void eShot(float x, float y, float dx, float dy)
-{
-  float l = hypotf(dx, dy);
-  if (l == 0)
-    l = 1;
-  float ux = dx / l, uy = dy / l, nx = -uy, ny = ux;
-  C(x, y, 3, 0xff3c28, 56);
-  Pt d[4] = {{x + ux * 4, y + uy * 4}, {x + nx * 1.8f, y + ny * 1.8f}, {x - ux * 3, y - uy * 3}, {x - nx * 1.8f, y - ny * 1.8f}};
-  poly(d, 4, RED);
-  P(x + ux, y + uy, 0xffe0d8);
-}
 static void drawFx(int k, float x, float y, float s, int t, int life)
 {
   float q = (float)t / life;
@@ -664,22 +575,60 @@ static void drawFx(int k, float x, float y, float s, int t, int life)
         R(x + cosf(an) * d * 0.7f, y + sinf(an) * d * 0.7f, 2, 2, 0x2a2420);
     }
   }
-  else
+  else if (k == 3) // 弾をはじいた火花
   {
-    for (int i = 1; i < 6; i++)
+    for (int i = 0; i < 5; i++)
     {
-      float tt = max(0, t - i * 2);
-      P(x + sinf(tt * 0.3f + s) * 7, y - tt * 1.4f, RED, (int)(178 * (1 - i / 6.0f)));
+      float an = i * 1.26f + s, d = 2 + t * 1.5f;
+      P(x + cosf(an) * d, y + sinf(an) * d, i % 2 ? 0xffe27a : 0xffffff);
     }
-    float ox = x + sinf(t * 0.3f + s) * 7, oy = y - t * 1.4f;
-    C(ox, oy, 3, 0xff3c28, 77);
-    C(ox, oy, 2, RED);
-    P(ox, oy, 0xffe0d8);
+  }
+  else if (k == 6) // 爆弾の爆風の輪
+  {
+    float r = 6 + q * 34;
+    CR(x, y, r, 0xffd25a, (int)(220 * (1 - q)));
+    CR(x, y, r - 2, 0xff8c28, (int)(150 * (1 - q)));
+    C(x, y, r * 0.8f, 0xff8c28, (int)(50 * (1 - q)));
+  }
+  else if (k == 4) // 核が乗り移った: 赤い輪が縮む
+  {
+    float r = 16 * (1 - q) + 3;
+    CR(x, y, r, RED, (int)(220 * (1 - q * 0.5f)));
+    CR(x, y, r * 0.6f, RED, (int)(140 * (1 - q)));
+  }
+  else // 5: 小さい爆発 (虫や節)
+  {
+    C(x, y, 3 + q * 7, 0xff8c28, (int)(130 * (1 - q)));
+    if (q < 0.5f)
+      C(x, y, 4 * (1 - q * 2) + 1, 0xffc23e);
+    for (int i = 0; i < 6; i++)
+    {
+      float an = i * 1.05f + s, d = 2 + q * 12;
+      P(x + cosf(an) * d, y + sinf(an) * d, i % 2 ? 0xffd25a : 0x55585b);
+    }
   }
 }
 
 
 // 戦車がやられたときの大きな爆発 (脚の破片が飛ぶ)
+// 弾を強くする部品: 青く光るエネルギーの電池 (味方の色)。脈打つ光の輪と P の字
+static void drawItem(float x, float y, int t)
+{
+  float p = 0.5f + 0.5f * sinf(t * 0.25f);
+  C(x, y, 11, 0x468cff, 30 + (int)(40 * p));
+  CR(x, y, 9 + p * 2, 0x6ab8ff, 140);
+  R(x - 6, y - 8, 12, 16, 0x2a2c2e);
+  R(x - 5, y - 7, 10, 14, 0x55585b);
+  R(x - 5, y - 7, 10, 1, 0xc4c9cc);
+  R(x - 2, y - 10, 4, 2, 0x8a8f94); // 電池の頭
+  R(x - 4, y - 5, 8, 10, p > 0.5f ? 0x6ab8ff : 0x3a7bff);
+  // P の字
+  R(x - 2, y - 4, 1, 8, 0xffffff);
+  R(x - 1, y - 4, 3, 1, 0xffffff);
+  R(x - 1, y - 1, 3, 1, 0xffffff);
+  R(x + 2, y - 3, 1, 2, 0xffffff);
+}
+
 static void drawBigBoom(float x, float y, float s, int t, int life)
 {
   float q = (float)t / life;
@@ -754,15 +703,14 @@ void Game2::Draw(Gfx &gx)
   s.cy1 = 100000;
   uint32_t t2 = micros();
   // 地上の敵、自分の弾、戦車
-  for (auto &e : en)
-    if (e.k == 1 && e.y > ltop - 30 && e.y < ltop + LSTRIP + 30)
-      drawWalker(e.x, e.y, e.walking ? t : 0, e.hit > 0);
+  drawEnemies(ltop, false);
   for (auto &b : shots)
     if (b.y > ltop - 8 && b.y < ltop + LSTRIP + 8)
     {
-      R(b.x - 2, b.y - 5, 5, 11, 0x468cff, 71);
-      R(b.x - 1, b.y - 4, 3, 9, 0x3a7bff);
-      R(b.x, b.y - 4, 1, 8, 0xe0f0ff);
+      float ux = b.dx / 7, uy = b.dy / 7; // 進む向きに伸びた青い光の筋
+      LT(b.x - ux * 5, b.y - uy * 5, b.x + ux * 5, b.y + uy * 5, 5, 0x468cff, 71);
+      LT(b.x - ux * 4, b.y - uy * 4, b.x + ux * 4, b.y + uy * 4, 3, 0x3a7bff);
+      L(b.x - ux * 4, b.y - uy * 4, b.x + ux * 4, b.y + uy * 4, 0xe0f0ff);
     }
   bool blink = invT > 0 && enterT == 0 && (t & 2); // 入り直したあとの点滅
   if (tankOn && !blink && ty > ltop - 40 && ty < ltop + LSTRIP + 40)
@@ -791,9 +739,22 @@ void Game2::Draw(Gfx &gx)
   }
   uint32_t t4 = micros();
   // 空の敵、爆発、敵の弾
-  for (auto &e : en)
-    if (e.k == 0 && e.y > ltop - 30 && e.y < ltop + LSTRIP + 30)
-      drawTwin(e.x, e.y, t, e.hit > 0);
+  if (bombOn) // 飛んでいる爆弾: 弧を描いて落ちる (影は床に)
+  {
+    float p = (float)bombT / BOMB_FLIGHT, bx = bombX0 + (bombX1 - bombX0) * p, gy = bombG0 + (bombG1 - bombG0) * p + sc;
+    float by = gy - sinf(p * PIf) * 22;
+    if (by > ltop - 12 && gy < ltop + LSTRIP + 12)
+    {
+      C(bx + 1, gy + 2, 3, 0, 90);
+      C(bx, by, 4, 0x2a2c2e);
+      C(bx - 1, by - 1, 2, 0x8a8f94);
+      P(bx + 1, by + 1, (t >> 1) & 1 ? 0x6ab8ff : 0x3a7bff);
+    }
+  }
+  for (auto &it : items)
+    if (it.y > ltop - 16 && it.y < ltop + LSTRIP + 16)
+      drawItem(it.x, it.y, it.t);
+  drawEnemies(ltop, true);
   for (auto &f : fx)
     if (f.t >= 0 && f.y > ltop - 70 && f.y < ltop + LSTRIP + 50)
     {
@@ -803,8 +764,8 @@ void Game2::Draw(Gfx &gx)
         drawFx(f.k, f.x, f.y, f.s, f.t, f.life);
     }
   for (auto &b : eb)
-    if (b.y > ltop - 6 && b.y < ltop + LSTRIP + 6)
-      eShot(b.x, b.y, b.dx, b.dy);
+    if (b.y > ltop - 10 && b.y < ltop + LSTRIP + 10)
+      drawEShot(b.k, b.x, b.y, b.dx, b.dy, b.life, t);
   drawOverlay(gx, ltop);
   uint32_t t5 = micros();
   profBg += t1 - t0;
@@ -868,6 +829,13 @@ void Game2::drawOverlay(Gfx &g, int ltop)
   if (playing && ltop + LSTRIP > 300)
     for (int i = 0; i < min(lives, 8); i++)
       lifeIcon(10 + i * 13, 308);
+  if (playing && ltop + LSTRIP > 300) // 弾の強さ (右下の青い目盛り)
+    for (int i = 0; i < 4; i++)
+    {
+      R(W - 54 + i * 12, 305, 9, 6, 0x0c1a30);
+      if (i <= shotLv)
+        R(W - 53 + i * 12, 306, 7, 4, i <= shotLv && i == shotLv && shotLv == 3 && (t & 4) ? 0xe0f0ff : 0x3a7bff);
+    }
 
   switch (mode)
   {
@@ -904,6 +872,8 @@ void Game2::drawOverlay(Gfx &g, int ltop)
     }
     if (extendT > 0 && (extendT / 6) % 2)
       txt(g, W / 2, 180, GOLD, "EXTEND!", true, 3);
+    if (powT > 0 && (powT / 4) % 2)
+      txt(g, W / 2, 200, 0x6ab8ff, shotLv >= 3 ? "MAX POWER" : "POWER UP", true, 3);
     if (paused)
     {
       panel(40, 120, 160, 64);

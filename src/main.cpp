@@ -265,7 +265,7 @@ void drawFrame()
   frames++;
 }
 
-// 確かめる用のコマンド: s = 画面を送る、f = 10 秒先へ進める、n = SW1 を押したことにする、m = 母船の直前へ
+// 確かめる用のコマンド: s = 画面を送る、f = 10 秒先へ進める、n = SW1 を押したことにする、m = 母船の直前へ、z = (2 本目) 次の区画へ、a = (2 本目) 自動で遊ぶ
 void serialCommands()
 {
   while (Serial.available())
@@ -275,6 +275,10 @@ void serialCommands()
       snapshot = true;
     else if (c == 'n')
       kSw1.hit = true;
+    else if (c == 'z' && game2) // 2 本目: 次の区画へ
+      game2->skipZone();
+    else if (c == 'a' && game2) // 2 本目: 自動で遊ぶ (やられない) を切り替える
+      game2->autoPilot = !game2->autoPilot;
     else if (!game)
       continue;
     else if (c == 'f')

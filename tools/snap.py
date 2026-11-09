@@ -1,6 +1,6 @@
 # 実機の画面をシリアルで受け取って PNG にする (確かめる用)。
 #   python tools/snap.py COM14 出力の頭 [コマンド...]
-# コマンド: s = 1 枚写す、f = 10 秒先へ進める、n = SW1 を押す、m = 母船の直前へ、w<秒> = 待つ、log = 速さの記録を表示
+# コマンド: s = 1 枚写す、f = 10 秒先へ進める、n = SW1 を押す、m = 母船の直前へ、z = (2 本目) 次の区画へ、a = (2 本目) 自動で遊ぶ、w<秒> = 待つ、log = 速さの記録を表示
 # 例: python tools/snap.py COM14 shots/a s w3 s f f s
 import sys
 import time
@@ -53,7 +53,7 @@ def main():
         if c == "s":
             snap(ser, "%s_%02d.png" % (prefix, n))
             n += 1
-        elif c in ("f", "n", "m"):
+        elif c in ("f", "n", "m", "z", "a"):
             ser.write(c.encode())
             time.sleep(0.3 if c == "n" else 1.5)
         elif c.startswith("w"):
