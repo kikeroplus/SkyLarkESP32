@@ -498,8 +498,9 @@ void loop2()
     uint32_t f = frames;
     Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f\n", drawUs / f, drawMax, gfx.usPush / f, stepUs / f,
                   f * 1000.0f / (millis() - lastLog));
-    Serial.printf("  bg %lu  anim %lu  objects %lu  fore %lu\n", game2->profBg / f, game2->profAnim / f, game2->profObj / f, game2->profFore / f);
-    game2->profBg = game2->profAnim = game2->profObj = game2->profFore = 0;
+    Serial.printf("  bg %lu  anim %lu  objects %lu (boss %lu  enemies %lu  hud %lu)  fore %lu  en %u\n", game2->profBg / f, game2->profAnim / f,
+                  game2->profObj / f, game2->profBoss / f, game2->profEn / f, game2->profHud / f, game2->profFore / f, game2->enemyCount());
+    game2->profBg = game2->profAnim = game2->profObj = game2->profFore = game2->profBoss = game2->profEn = game2->profHud = 0;
     drawUs = drawMax = stepUs = frames = 0;
     gfx.usPush = 0;
     lastLog = millis();

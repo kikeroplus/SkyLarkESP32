@@ -24,4 +24,5 @@ extern uint8_t *foreRow; // 手前の絵がある行は 1
 const uint16_t KEY = 0x0821; // 手前の絵の抜き色
 
 bool build(); // PSRAM を取って描く (起動時)
+extern bool hideCrane; // 沈殿槽の天井クレーンを描かない (ボスのガントリーが出ているあいだ)
 } // namespace bg2

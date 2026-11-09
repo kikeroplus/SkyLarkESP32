@@ -19,6 +19,7 @@ static const int ENTER_FRAMES = 40, INV_FRAMES = 100, DEAD_FRAMES = 50;
 
 static float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : v; }
 void drawEShot(int k, float x, float y, float dx, float dy, int life, int t); // game2_enemy.cpp
+const char *bossName(int k);                                                 // game2_boss.cpp
 
 bool Game2::begin()
 {
@@ -53,6 +54,9 @@ void Game2::resetWorld()
   ang = -PIf / 2;
   pendingLvl = 0;
   resetSpawns(true);
+  boss = Boss();
+  spd = SPEED;
+  bossBannerT = 0;
   items.clear();
   bombOn = false;
   bombCool = 0;
@@ -267,7 +271,9 @@ void Game2::Step(const Input &in)
 void Game2::stepWorld(const Input *in)
 {
   t++;
-  scroll += SPEED;
+  spd += ((boss.k >= 0 && boss.dieT == 0 ? 0.0f : SPEED) - spd) * 0.04f; // ボスのあいだは流れが止まる
+  scroll += spd;
+  bossStep();
   if (tankOn)
   {
     if (mode == Mode::Attract || (autoPilot && mode == Mode::Play && enterT == 0))
@@ -319,7 +325,7 @@ void Game2::stepWorld(const Input *in)
   {
     bool hit = false;
     for (auto &b : eb)
-      if (!b.dead && b.k != 3 && fabsf(b.x - tx) < 5 && fabsf(b.y - ty) < 7)
+      if (!b.dead && b.k != 3 && (b.k == 2 ? hypotf(b.x - tx, b.y - ty) < 7 : fabsf(b.x - tx) < 5 && fabsf(b.y - ty) < 7))
       {
         b.dead = true;
         hit = true;
@@ -391,7 +397,7 @@ void Game2::stepTank(float ax, float ay, bool fire, bool slow)
   float ntx = clampf(tx + ax * sp, 26, W - 26), nty = ty + ay * sp;
   if (enterT == 0)
     nty = clampf(nty, 110, H - 24);
-  float vx = ntx - tx, vy = nty - ty - SPEED;
+  float vx = ntx - tx, vy = nty - ty - spd;
   tx = ntx;
   ty = nty;
 
@@ -680,6 +686,7 @@ void Game2::Draw(Gfx &gx)
     memcpy(gx.buf + ly * LW, bg2::bgBuf + (size_t)r * LW, LW * 2);
   }
   uint32_t t1 = micros();
+  bg2::hideCrane = boss.k == 0;
   Surf s;
   s.buf = gx.buf;
   s.y0 = ltop;
@@ -703,7 +710,13 @@ void Game2::Draw(Gfx &gx)
   s.cy1 = 100000;
   uint32_t t2 = micros();
   // 地上の敵、自分の弾、戦車
+  uint32_t q0 = micros();
   drawEnemies(ltop, false);
+  uint32_t q1 = micros();
+  bossDraw(ltop, false);
+  uint32_t q2 = micros();
+  profEn += q1 - q0;
+  profBoss += q2 - q1;
   for (auto &b : shots)
     if (b.y > ltop - 8 && b.y < ltop + LSTRIP + 8)
     {
@@ -754,7 +767,13 @@ void Game2::Draw(Gfx &gx)
   for (auto &it : items)
     if (it.y > ltop - 16 && it.y < ltop + LSTRIP + 16)
       drawItem(it.x, it.y, it.t);
+  q0 = micros();
+  bossDraw(ltop, true);
+  q1 = micros();
   drawEnemies(ltop, true);
+  q2 = micros();
+  profBoss += q1 - q0;
+  profEn += q2 - q1;
   for (auto &f : fx)
     if (f.t >= 0 && f.y > ltop - 70 && f.y < ltop + LSTRIP + 50)
     {
@@ -766,7 +785,9 @@ void Game2::Draw(Gfx &gx)
   for (auto &b : eb)
     if (b.y > ltop - 10 && b.y < ltop + LSTRIP + 10)
       drawEShot(b.k, b.x, b.y, b.dx, b.dy, b.life, t);
+  q0 = micros();
   drawOverlay(gx, ltop);
+  profHud += micros() - q0;
   uint32_t t5 = micros();
   profBg += t1 - t0;
   profAnim += t2 - t1;
@@ -836,6 +857,27 @@ void Game2::drawOverlay(Gfx &g, int ltop)
       if (i <= shotLv)
         R(W - 53 + i * 12, 306, 7, 4, i <= shotLv && i == shotLv && shotLv == 3 && (t & 4) ? 0xe0f0ff : 0x3a7bff);
     }
+
+  // ボスの耐久の帯と、出てきたとき・倒したときの知らせ
+  if (boss.k >= 0 && boss.dieT == 0 && mode != Mode::Attract)
+  {
+    txt(g, 4, 22, REDT, bossName(boss.k));
+    R(52, 24, 182, 5, 0x1a0806);
+    R(52, 24, 182 * boss.hp[0] / max(1, boss.maxhp[0]), 5, boss.stun > 0 ? 0x3a7bff : 0xff3b2a);
+    R(52, 24, 182, 1, 0x6b3a1e, 160);
+  }
+  if (bossBannerT > 0 && mode == Mode::Play && !paused)
+  {
+    if (bossResult == 0 && (bossBannerT / 8) % 2)
+    {
+      txt(g, W / 2, 120, REDT, "WARNING", true, 5);
+      txt(g, W / 2, 150, CREAM, bossName(boss.k), true, 3);
+    }
+    else if (bossResult == 1)
+      txt(g, W / 2, 130, GOLD, "DESTROYED", true, 5);
+    else if (bossResult == 2)
+      txt(g, W / 2, 130, MUTE, "IT ESCAPED", true, 3);
+  }
 
   switch (mode)
   {

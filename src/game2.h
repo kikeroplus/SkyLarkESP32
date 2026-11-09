@@ -16,6 +16,7 @@ public:
   void Step(const Input &in);
   void Draw(Gfx &g); // 帯 1 本ぶん (main が帯ごとに呼ぶ)
   void skipZone();   // 確かめる用: 次の区画の始まりへ進める
+  unsigned enemyCount() const { return en.size(); }
   bool autoPilot = false; // 確かめる用: 遊んでいるあいだも自動で歩いて撃ち、やられない
 
   Rank Table[5] = {{50000, "IRN"}, {40000, "LEG"}, {30000, "RST"}, {20000, "FOU"}, {10000, "NDR"}};
@@ -24,7 +25,7 @@ public:
   bool WantMenu = false;            // 選択画面へ戻りたい
 
   uint32_t buildMs = 0;
-  uint32_t profBg = 0, profAnim = 0, profObj = 0, profFore = 0; // 描く時間の内訳 (確かめる用。us の合計)
+  uint32_t profBg = 0, profAnim = 0, profObj = 0, profFore = 0, profBoss = 0, profEn = 0, profHud = 0; // 描く時間の内訳 (確かめる用。us の合計)
 
   struct Shot
   {
@@ -55,6 +56,7 @@ public:
     float vx = 0, vy = 0, a = 0, r = 0;
     float ux = 0, uy = 0;       // パイプヘビ: 潜る口 (床の位置)
     int hp = 1, maxhp = 1, t0 = 0, hit = 0, tm = 0, cnt = 0, grp = 0, link = -1;
+    int virus = 0;              // 爆弾のウイルスで止まっている残りのフレーム (動かず、撃たず、触れてもやられない)
     uint8_t seg[8] = {};        // パイプヘビの節の耐久
     bool gone = false, hidden = false, alerted = false;
   };
@@ -66,6 +68,17 @@ public:
     bool ground;
   };
 
+  struct Boss
+  {
+    int k = -1;                          // -1 はいない
+    int t = 0, st = 0, tm = 0, stun = 0; // stun: 爆弾のウイルスで止まっている残り
+    int enterT = 0, dieT = 0, heals = 0, fireIdx = 0;
+    float x = 0, y = 0, u = 0, elev = 0, ty = 0;
+    int hp[9] = {}, maxhp[9] = {}, hit[9] = {}; // 部位ごとの耐久 (0 がいちばん大事な部位)
+    float hookY = 0, hookOff = 0;
+    float ringX = 0, ringY = 0, ringR = 0;
+    bool ringOn = false, escaped = false;
+  };
 private:
   enum class Mode
   {
@@ -109,6 +122,20 @@ private:
   float bombX0 = 0, bombG0 = 0, bombX1 = 0, bombG1 = 0; // 投げた所と落ちる所 (y は床の位置)
   int bombT = 0, bombCool = 0;
   void bombBlast(float x, float y);
+
+  // ボス (game2_boss.cpp)。区画の決まった所で 1 体ずつ出る。出ているあいだは流れが止まる
+  // 0 ガントリー (沈殿槽の天井クレーン) / 1 スタンパー (止まったプレス機) / 2 炉心 (溶鉱炉の跡、最後のボス)
+  Boss boss;
+  float spd = 0.55f;   // 今の流れる速さ
+  int bossBannerT = 0; // 「WARNING」や「倒した」を出す残り
+  int bossResult = 0;  // 0 なし / 1 倒した / 2 逃げられた
+  void startBoss(int k);
+  void bossStep();
+  bool bossShot(float x, float y); // 自分の弾が当たったら true
+  void bossBomb(float x, float y);
+  void bossHurt(int part, int dmg);
+  void bossDraw(int ltop, bool air);
+  float bossEyeX() const, bossEyeY() const;
 
   void resetWorld();
   void startDemo();

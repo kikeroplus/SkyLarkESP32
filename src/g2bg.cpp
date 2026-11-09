@@ -840,8 +840,13 @@ static void z4(int h)
   pipe({{0, 40}, {140, 40}, {140, 70}}, 2, PP[YELLOW], 12, 3, 4, true);
   ledge(44);
 }
+// 区画のローカルの y0〜y1 が、いま描いている帯にかかるか (動く部分を帯ごとに描くとき、かからない物は飛ばす)
+static bool rowsVisible(float y0, float y1) { return y1 + d2::S->oy >= d2::S->cy0 && y0 + d2::S->oy <= d2::S->cy1; }
+
 static void z4a(int h, int t)
 {
+  if (!rowsVisible(252 - 140, 252 + 70)) // 動くプレス (ヘッドが上がると上へ伸びる)
+    return;
   float p = (t % 150) / 150.0f, z;
   if (p < 0.7f)
     z = 34;
@@ -907,6 +912,7 @@ static void z5(int h)
   pipe({{(float)W, 300}, {200, 300}, {200, 330}}, 2, PP[RED], 12, 0, 0, true);
   ledge(55);
 }
+bool hideCrane = false;
 static void z5a(int h, int t)
 {
   for (int i = 0; i < 18; i++)
@@ -925,6 +931,8 @@ static void z5a(int h, int t)
   }
   float q = (t % 60) / 60.0f;
   CR(44, 214, 4 + q * 8, 0x78aa96, A(0.5f * (1 - q)));
+  if (hideCrane)
+    return;
   float cy = 50 + (h - 110) * (0.5f + 0.5f * sinf(t * 0.004f)), tx = 120 + 70 * sinf(t * 0.007f);
   R(0, cy + 24, W, 11, 0, 71);
   R(tx + 2, cy + 22, 18, 14, 0, 71);

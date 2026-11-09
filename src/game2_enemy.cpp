@@ -3,15 +3,16 @@
 #include "game2.h"
 #include "g2bg.h"
 #include "g2draw.h"
+#include "g2parts.h"
 #include <algorithm>
 
 using namespace d2;
+using namespace ep;
 typedef Game2::Enemy Enemy;
 
 static const int W = 240, H = 320;
-static const float SPEED = 0.55f; // game2.cpp と同じ (背景が流れる速さ)
-static const uint32_t RED = 0xff3b2a, RED2 = 0xb0201a, RED3 = 0x4a1410, REDW = 0xffe8e0;
-static const float SNAKE_DU = 0.05f; // パイプヘビの節と節の間 (道のりの割合)
+static const float SNAKE_DU = 0.05f;
+static const int VIRUS_FRAMES = 13 * 30; // ウイルスで止まる長さ (13 秒) // パイプヘビの節と節の間 (道のりの割合)
 
 static float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : v; }
 static float angDiff(float a, float b)
@@ -50,6 +51,7 @@ static constexpr uint8_t eSN = Game2::SNAKE;
 static constexpr uint8_t eEY = Game2::EYE;
 static constexpr uint8_t eSC = Game2::SCRAP;
 static constexpr uint8_t eMT = Game2::MAINT;
+static constexpr uint8_t bGANTRY = 100, bSTAMPER = 101, bHEARTH = 102; // ボス
 static const Ev EVS[] = {
     // 0 草むらの搬入口: 少なめ。ツインファンとウォーカーから
     {0, 40, eTW, 60, 1}, {0, 110, eWK, 170, 1}, {0, 180, eTW, 150, 2}, {0, 250, eFK, 70, 1}, {0, 310, eBG, 120, 3},
@@ -65,18 +67,18 @@ static const Ev EVS[] = {
     {3, 40, eSN, 50, 1}, {3, 110, eTW, 170, 2}, {3, 160, eBG, 170, 6}, {3, 220, eSN, 190, 1}, {3, 290, eTW, 60, 3},
     {3, 340, eBG, 70, 6}, {3, 380, eSN, 60, 1}, {3, 450, eTW, 140, 2}, {3, 505, eEY, 22, 1},
     // 4 止まったプレス: ダンゴとウェルダー
-    {4, 30, eSC, 80, 1}, {4, 90, eWD, 180, 1}, {4, 140, eWK, 60, 2}, {4, 190, eSC, 170, 1}, {4, 240, eTW, 120, 2},
+    {4, 30, eSC, 80, 1}, {4, 90, eWD, 180, 1}, {4, 140, eWK, 60, 2}, {4, 190, eSC, 170, 1}, {4, 215, bSTAMPER, 0, 1}, {4, 240, eTW, 120, 2},
     {4, 290, eWD, 50, 1}, {4, 330, eMT, 180, 1}, {4, 370, eSC, 110, 1},
     // 5 沈殿槽: 水の上なので空の敵
     {5, 30, eTW, 60, 3}, {5, 90, eTW, 180, 3}, {5, 150, eMT, 120, 1}, {5, 190, eTW, 120, 4}, {5, 250, eEY, 218, 1},
-    {5, 290, eTW, 50, 3}, {5, 340, eTW, 190, 3}, {5, 400, eMT, 80, 1},
+    {5, 290, eTW, 50, 3}, {5, 300, bGANTRY, 0, 1}, {5, 340, eTW, 190, 3}, {5, 400, eMT, 80, 1},
     // 6 大きな建屋: フォークとアイ
     {6, 30, eFK, 120, 1}, {6, 90, eWK, 60, 2}, {6, 140, eEY, 22, 1}, {6, 180, eFK, 180, 1}, {6, 230, eMT, 100, 1},
     {6, 260, eTW, 140, 2}, {6, 310, eWK, 170, 2}, {6, 360, eFK, 60, 1}, {6, 410, eBG, 120, 6}, {6, 450, eEY, 218, 1},
     {6, 480, eFK, 150, 1},
     // 7 溶鉱炉の跡: ダンゴ
     {7, 30, eSC, 60, 1}, {7, 80, eTW, 170, 3}, {7, 130, eWK, 110, 2}, {7, 180, eSC, 180, 1}, {7, 230, eTW, 60, 3},
-    {7, 280, eSC, 120, 1}, {7, 330, eMT, 60, 1}, {7, 360, eWK, 170, 2}, {7, 420, eTW, 120, 4}, {7, 460, eSC, 70, 1},
+    {7, 280, eSC, 120, 1}, {7, 330, eMT, 60, 1}, {7, 360, eWK, 170, 2}, {7, 400, bHEARTH, 0, 1}, {7, 420, eTW, 120, 4}, {7, 460, eSC, 70, 1},
 };
 static const int NEV = sizeof(EVS) / sizeof(EVS[0]);
 static const int LEAD = 16; // 画面の上端より少し上で出す
@@ -127,6 +129,8 @@ void Game2::skipZone()
   born.clear();
   eb.clear();
   fx.clear();
+  boss = Boss();
+  spd = 0.55f;
   for (int g = 0; g < 400; g++)
   {
     if (evIdx >= NEV)
@@ -164,6 +168,11 @@ Enemy &Game2::addEnemy(int k, float x, float y)
 
 void Game2::spawn(int k, int x, int n, float gyTop)
 {
+  if (k >= 100) // ボス
+  {
+    startBoss(k - 100);
+    return;
+  }
   int sc = (int)scroll;
   for (int i = 0; i < n; i++)
   {
@@ -285,6 +294,11 @@ void Game2::enemyStep()
   {
     if (b.dead)
       continue;
+    if (bossShot(b.x, b.y))
+    {
+      b.dead = true;
+      continue;
+    }
     for (auto &e : en)
     {
       if (e.hp <= 0 || e.gone || (e.hidden && e.k != SNAKE))
@@ -352,7 +366,7 @@ void Game2::enemyStep()
   {
     f.t++;
     if (f.ground)
-      f.y += SPEED;
+      f.y += spd;
   }
   fx.erase(std::remove_if(fx.begin(), fx.end(), [](const Fx &f) { return f.t > f.life; }), fx.end());
 }
@@ -370,6 +384,25 @@ void Game2::stepOne(Enemy &e)
   auto tick = [&](int base) { return age > 20 && (age + e.id * 7) % period(base, e.lvl, diff) == 0; };
   if (e.hit)
     e.hit--;
+  if (e.virus > 0) // ウイルスで止まっている: 床の敵は床と一緒に流れるだけ、空の敵はゆっくり落ちる
+  {
+    e.virus--;
+    e.t0++; // 動きの時間も止める
+    if (e.k == SNAKE)
+      snakeAt(e, clampf(e.r, 0, 1), sc, e.x, e.y);
+    else if (isAir(e.k))
+      e.y += 0.3f;
+    else
+    {
+      e.x = e.gx;
+      e.y = e.gy + sc;
+    }
+    if (e.k == TWIN)
+      e.gx = e.x - 26 * sinf((t - e.t0) * 0.03f + e.a); // 動き出したときに跳ばないように
+    if (e.y > H + 40)
+      e.gone = true;
+    return;
+  }
 
   switch (e.k)
   {
@@ -439,8 +472,8 @@ void Game2::stepOne(Enemy &e)
     float w = sinf(age * 0.15f + e.id) * 0.6f;
     float mx = (dx - dy * w) * s, my = (dy + dx * w) * s;
     e.gx += mx;
-    e.gy += my - (e.st == 0 ? 0 : SPEED * 0.5f);
-    e.a = atan2f(my + SPEED, mx);
+    e.gy += my - (e.st == 0 ? 0 : 0.28f);
+    e.a = atan2f(my + spd, mx);
     e.x = e.gx;
     e.y = e.gy + sc;
     if (e.st == 1 && (e.x < -12 || e.x > W + 12 || e.y < -12))
@@ -671,6 +704,27 @@ void Game2::stepOne(Enemy &e)
 
   case CORE:
   {
+    if (e.st == 0 && e.link == -2) // 炉心に呼ばれた核: 炉心の目へ。着いたら炉心が直る
+    {
+      if (boss.k != 2 || boss.dieT > 0)
+        e.st = 1;
+      else
+      {
+        float gx = bossEyeX(), gy = bossEyeY(), d = hypotf(gx - e.x, gy - e.y);
+        float ux = (gx - e.x) / max(d, 1.0f), uy = (gy - e.y) / max(d, 1.0f), z = cosf(age * 0.3f) * 1.6f;
+        e.vx = ux * 1.5f - uy * z;
+        e.vy = uy * 1.5f + ux * z;
+        e.x += e.vx;
+        e.y += e.vy;
+        if (d < 8)
+        {
+          boss.hp[0] = min(boss.maxhp[0], boss.hp[0] + 6);
+          fx.push_back({4, gx, gy, 0, 0, 16, false});
+          e.gone = true;
+        }
+      }
+      break;
+    }
     if (e.st == 0)
     {
       Enemy *tg = findId(e.link);
@@ -678,7 +732,7 @@ void Game2::stepOne(Enemy &e)
       {
         float bd = 260;
         for (auto &o : en)
-          if (o.hp > 0 && !o.gone && isMachine(o.k) && o.y > -10 && o.y < H + 10)
+          if (o.hp > 0 && !o.gone && o.virus == 0 && isMachine(o.k) && o.y > -10 && o.y < H + 10)
           {
             float d = hypotf(o.x - e.x, o.y - e.y);
             if (d < bd)
@@ -855,7 +909,10 @@ void Game2::bombBlast(float x, float y)
       continue;
     for (int k = 0; k < 2 && e.hp > 0; k++)
       hitEnemy(e, 0, e.y);
+    if (e.hp > 0 && e.k != CORE) // 生き残った機械には、ウイルスを仕掛ける
+      e.virus = VIRUS_FRAMES;
   }
+  bossBomb(x, y);
 }
 
 void Game2::dropItem(float x, float y)
@@ -866,7 +923,7 @@ void Game2::dropItem(float x, float y)
 
 bool Game2::touchesTank(const Enemy &e) const
 {
-  if (e.hp <= 0 || e.gone)
+  if (e.hp <= 0 || e.gone || e.virus > 0)
     return false;
   float dx = e.x - tx, dy = e.y - ty;
   switch (e.k)
@@ -902,8 +959,10 @@ bool Game2::touchesTank(const Enemy &e) const
   }
 }
 
-// ---- 描く部品 ----
-static void eye(float x, float y, float r, int t, bool flash, bool weakFlicker)
+// ---- 描く部品 (ボスも使う。g2parts.h) ----
+namespace ep
+{
+void eye(float x, float y, float r, int t, bool flash, bool weakFlicker)
 {
   if (weakFlicker && ((t >> 1) & 1)) // 弱ると目がちらつく
   {
@@ -919,7 +978,7 @@ static void eye(float x, float y, float r, int t, bool flash, bool weakFlicker)
 }
 
 // 機械に這う赤い配線 (光が流れる)
-static void nerve(std::initializer_list<Pt> pts, int t, float ph = 0)
+void nerve(std::initializer_list<Pt> pts, int t, float ph)
 {
   int i = 0;
   const Pt *p = pts.begin();
@@ -938,14 +997,14 @@ static void nerve(std::initializer_list<Pt> pts, int t, float ph = 0)
   }
 }
 
-static void sparks(float x, float y, int t, int n)
+void sparks(float x, float y, int t, int n)
 {
   for (int k = 0; k < n; k++)
     if (hs(t * 3.1f + k) > 0.5f)
       P(x + (hs(t + k) - 0.5f) * 14, y + (hs(t * 1.7f + k) - 0.5f) * 14, k % 2 ? 0xffe27a : REDW);
 }
 
-static void block(float fx, float fgy, int w, int d, float fhh, uint32_t top, uint32_t front)
+void block(float fx, float fgy, int w, int d, float fhh, uint32_t top, uint32_t front)
 {
   int x = lroundf(fx), gy = lroundf(fgy), hh = lroundf(fhh);
   for (int r = 0; r <= hh; r++)
@@ -961,6 +1020,7 @@ static void block(float fx, float fgy, int w, int d, float fhh, uint32_t top, ui
   }
   R(x + w - 1, gy - hh, 1, d + hh, 0, 64);
 }
+} // namespace ep
 
 static void drawTwin(float x, float y, int t, bool flash, bool hurt, bool broken)
 {
@@ -1299,6 +1359,13 @@ void drawEShot(int k, float x, float y, float dx, float dy, int life, int t)
     L(x + ux * 4 + nx * j, y + uy * 4 + ny * j, x + ux * 7, y + uy * 7, RED);
     P(x, y, REDW);
   }
+  else if (k == 2) // 橙の大きな弾 (ボス)
+  {
+    C(x, y, 6, 0xff7828, 64);
+    C(x, y, 4, 0xff7a2a);
+    C(x - 1, y - 1, 2, 0xffb060);
+    P(x - 1, y - 1, 0xfff0d0);
+  }
   else if (k == 3) // 蒸気
   {
     float q = 1 - life / 18.0f;
@@ -1359,8 +1426,17 @@ void Game2::drawEnemies(int ltop, bool air)
       drawCore(e);
       break;
     }
-    if (hurt && !e.hidden)
+    if (hurt && !e.hidden && e.virus == 0)
       sparks(e.x, e.y, t, 4);
+    if (e.virus > 0 && (e.virus > 60 || (t & 4))) // ウイルス: 青い輪と、ちらつく青いノイズ (終わりぎわは点滅)
+    {
+      float rad = e.k == SCRAP ? e.r + 3 : e.k == BUG ? 7 : 13;
+      CR(e.x, e.y, rad, 0x3a7bff, 150);
+      for (int i = 0; i < 7; i++)
+        R(e.x + (hs(t * 1.3f + i + e.id) - 0.5f) * rad * 2, e.y + (hs(t * 2.1f + i * 3 + e.id) - 0.5f) * rad * 2, 1 + (i & 1) * 2, 1,
+          i % 3 ? 0x6ab8ff : 0xe0f0ff);
+      R(e.x - 1, e.y - rad - 5, 3, 3, 0x6ab8ff);
+    }
     if (e.lvl > 0 && !e.hidden)
     {
       static const float RAD[] = {16, 15, 7, 12, 18, 9, 10, 0, 10, 0};
