@@ -21,6 +21,26 @@ static float clampf(float v, float a, float b) { return v < a ? a : v > b ? b : 
 void drawEShot(int k, float x, float y, float dx, float dy, int life, int t); // game2_enemy.cpp
 const char *bossName(int k);                                                 // game2_boss.cpp
 
+void Game2::sfx(Sfx s, float vol)
+{
+  if (Snd)
+    Snd->Play(s, mode == Mode::Attract ? vol * 0.5f : vol); // デモは小さめ
+}
+
+// 鳴り続ける音: 区画で変える。草むらは小鳥、溶鉱炉はごうごう、ボスのあいだは低いうなり
+void Game2::updateAmbience()
+{
+  if (!Snd)
+    return;
+  bool quiet = paused || mode == Mode::Continue || mode == Mode::NameEntry;
+  int z = lastZone < 0 ? 0 : lastZone;
+  float k = quiet ? 0 : mode == Mode::Attract ? 0.5f : 1;
+  Snd->Birds = z == 0 ? 0.6f * k : 0;
+  Snd->Hum = (z == 0 ? 0.35f : z == 7 ? 0.5f : 1.0f) * k;
+  Snd->Roar = z == 7 ? 1.0f * k : 0;
+  Snd->MomHum = boss.k >= 0 && boss.dieT == 0 ? 0.55f * k : 0;
+}
+
 bool Game2::begin()
 {
   uint32_t t0 = millis();
@@ -87,6 +107,7 @@ void Game2::newGame()
   lives = 2;
   nextExtend = 40000;
   continues = 0;
+  sfx(Sfx::G2Start);
   enterTank();
 }
 
@@ -104,6 +125,7 @@ void Game2::enterTank()
 
 void Game2::killTank()
 {
+  sfx(Sfx::Death);
   tankOn = false;
   deadT = DEAD_FRAMES;
   shotLv = max(0, shotLv - 1); // 弾の強さは 1 段下がる
@@ -117,6 +139,7 @@ void Game2::endGame()
   mode = Mode::GameOver;
   modeT = 4 * FPS;
   tankOn = false;
+  sfx(Sfx::GameOver);
 }
 
 int Game2::rankOf(int s) const
@@ -149,6 +172,7 @@ void Game2::stepEntry(const Input &in)
     entryRepeat = 0;
   if (dir != 0)
   {
+    sfx(Sfx::Select);
     int n = strlen(LETTERS), k = strchr(LETTERS, entry[entryPos]) - LETTERS;
     entry[entryPos] = LETTERS[(k + dir + n) % n];
   }
@@ -158,6 +182,7 @@ void Game2::stepEntry(const Input &in)
     entryPos++;
   if (in.FirePressed)
   {
+    sfx(Sfx::Select);
     if (entryPos < 2)
       entryPos++;
     else
@@ -191,6 +216,15 @@ void Game2::finishEntry()
 
 void Game2::Step(const Input &in)
 {
+  if (in.VolumePressed && !(mode == Mode::Play && paused)) // SW3 を短く押すと音量を 1 段上げる (いちばん上の次は OFF)
+  {
+    VolumeLevel = (VolumeLevel + 1) % 5;
+    VolumeChanged = true;
+    volT = 2 * FPS;
+  }
+  if (volT > 0)
+    volT--;
+  updateAmbience();
   switch (mode)
   {
   case Mode::Attract:
@@ -209,7 +243,10 @@ void Game2::Step(const Input &in)
     break;
   case Mode::Play:
     if (in.PausePressed || (paused && in.VolumePressed)) // 長押しで止める。止めているあいだは短く押しても戻る
+    {
       paused = !paused;
+      sfx(Sfx::Pause);
+    }
     if (paused)
     {
       if (in.QuitPressed)
@@ -224,6 +261,7 @@ void Game2::Step(const Input &in)
       mode = Mode::Play;
       lives = 2;
       continues++;
+      sfx(Sfx::G2Start);
       if (score % 10 < 9) // 点のいちばん下の桁は、コンティニューした回数
         score++;
       enterTank();
@@ -231,6 +269,8 @@ void Game2::Step(const Input &in)
     }
     if (in.PausePressed || in.QuitPressed) // やめる
       modeT = 1;
+    if (modeT % FPS == 0 && modeT > 0)
+      sfx(Sfx::Tick);
     if (--modeT <= 0)
       endGame();
     break;
@@ -295,6 +335,7 @@ void Game2::stepWorld(const Input *in)
     {
       int sc = (int)scroll;
       bombOn = true;
+      sfx(Sfx::Bomb, 0.6f);
       bombT = 0;
       bombCool = BOMB_COOL;
       bombX0 = tx;
@@ -342,6 +383,7 @@ void Game2::stepWorld(const Input *in)
   if (mode == Mode::Play && score >= nextExtend)
   {
     lives++;
+    sfx(Sfx::Extend);
     nextExtend += 60000;
     extendT = 2 * FPS;
   }
@@ -367,10 +409,15 @@ void Game2::stepWorld(const Input *in)
       if (shotLv < 3)
       {
         shotLv++;
+        sfx(Sfx::Power);
         powT = 2 * FPS;
       }
-      else if (mode == Mode::Play)
-        score += 1000;
+      else
+      {
+        if (mode == Mode::Play)
+          score += 1000;
+        sfx(Sfx::Power, 0.6f);
+      }
     }
   }
   items.erase(std::remove_if(items.begin(), items.end(), [](const Item &i) { return i.y > H + 12; }), items.end());
@@ -422,6 +469,7 @@ void Game2::stepTank(float ax, float ay, bool fire, bool slow)
           feet[i].sy = feet[i].y;
         }
   }
+  bool landed = false;
   for (int i = 0; i < 6; i++)
   {
     Foot &f = feet[i];
@@ -433,8 +481,14 @@ void Game2::stepTank(float ax, float ay, bool fire, bool slow)
     f.x = f.sx + (gx - f.sx) * e;
     f.y = f.sy + (gy - f.sy) * e;
     if (f.p >= 1)
+    {
       f.p = -1;
+      landed = true;
+    }
   }
+
+  if (landed && enterT == 0) // 3 本の足が着いた: カシャ
+    sfx(Sfx::Step, mode == Mode::Attract ? 0.5f : 1);
 
   // 砲塔: いちばん近い前の敵へ向く (上から左右 0.6 まで)
   const Enemy *best = nullptr;
@@ -470,6 +524,7 @@ void Game2::stepTank(float ax, float ay, bool fire, bool slow)
       for (float d : {-0.42f, 0.42f})
         shots.push_back({tx + dx * 10, ty - 1 + dy * 10, cosf(ang + d) * 7, sinf(ang + d) * 7, false});
     rec = 3;
+    sfx(Sfx::G2Shot, mode == Mode::Attract ? 0.4f : 0.8f);
     fireCool = shotLv >= 2 ? 4 : 6;
   }
   rec = max(0.0f, rec - 0.6f);
@@ -858,6 +913,14 @@ void Game2::drawOverlay(Gfx &g, int ltop)
         R(W - 53 + i * 12, 306, 7, 4, i <= shotLv && i == shotLv && shotLv == 3 && (t & 4) ? 0xe0f0ff : 0x3a7bff);
     }
 
+  // 音量の目盛り (SW3 を短く押したとき)
+  if (volT > 0)
+  {
+    panel(70, 262, 100, 22);
+    txt(g, 78, 270, CREAM, VolumeLevel == 0 ? "VOL OFF" : "VOL");
+    for (int i = 0; i < 4; i++)
+      R(110 + i * 13, 270, 10, 8, i < VolumeLevel ? GOLD : 0x2a2420);
+  }
   // ボスの耐久の帯と、出てきたとき・倒したときの知らせ
   if (boss.k >= 0 && boss.dieT == 0 && mode != Mode::Attract)
   {

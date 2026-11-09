@@ -379,7 +379,11 @@ void Game2::stepOne(Enemy &e)
   float toT = atan2f(ty - e.y, tx - e.x), dist = hypotf(tx - e.x, ty - e.y);
   auto shoot = [&](float x, float y, float a, float s, int k, int life) {
     if ((int)eb.size() < 14 + (int)(8 * diff)) // 画面の敵の弾は多くなりすぎないように
+    {
       eb.push_back({x, y, cosf(a) * s, sinf(a) * s, false, k, life});
+      if (k != 3)
+        sfx(Sfx::EnemyShot, 0.5f);
+    }
   };
   auto tick = [&](int base) { return age > 20 && (age + e.id * 7) % period(base, e.lvl, diff) == 0; };
   if (e.hit)
@@ -513,6 +517,8 @@ void Game2::stepOne(Enemy &e)
   {
     if (e.st == 0) // エンジンをふかす
     {
+      if (e.tm == 0 && e.y > 0)
+        sfx(Sfx::Growl, 0.35f);
       if (++e.tm >= 40)
       {
         e.st = 1;
@@ -569,8 +575,11 @@ void Game2::stepOne(Enemy &e)
     if (e.gy + sc > H + 140)
       e.gone = true;
     if (!e.hidden && e.st == 0 && dist < 70 && canShoot && age % 50 == 0) // 頭のバルブから蒸気
+    {
       for (float d : {-0.3f, 0.0f, 0.3f})
         shoot(e.x, e.y, toT + d, 2.2f, 3, 18);
+      sfx(Sfx::Steam);
+    }
     break;
   }
 
@@ -586,6 +595,7 @@ void Game2::stepOne(Enemy &e)
       {
         e.st = 1;
         e.tm = 0;
+        sfx(Sfx::Alarm);
         if (!e.alerted) // 仲間に知らせる: ツインファンが 2 機来る
         {
           e.alerted = true;
@@ -719,6 +729,7 @@ void Game2::stepOne(Enemy &e)
         if (d < 8)
         {
           boss.hp[0] = min(boss.maxhp[0], boss.hp[0] + 6);
+          sfx(Sfx::Possess, 0.8f);
           fx.push_back({4, gx, gy, 0, 0, 16, false});
           e.gone = true;
         }
@@ -764,6 +775,7 @@ void Game2::stepOne(Enemy &e)
           if (tg->k == WALKER || tg->k == TWIN || tg->k == FORK)
             tg->st = min(tg->st, tg->k == FORK ? 2 : 0); // 弱って逃げていたのをやめる
           fx.push_back({4, tg->x, tg->y, 0, 0, 16, !isAir(tg->k)});
+          sfx(Sfx::Possess);
           e.gone = true;
         }
       }
@@ -777,6 +789,7 @@ void Game2::stepOne(Enemy &e)
       if (e.y < -16)
       {
         e.gone = true;
+        sfx(Sfx::Possess, 0.4f);
         if (diff >= 0.4f) // 序盤は逃がしても強くならない
           pendingLvl = min(3, pendingLvl + 1); // 次に出る機械に乗り移る (たまるのは 3 つまで)
       }
@@ -791,7 +804,10 @@ void Game2::stepOne(Enemy &e)
 void Game2::hitEnemy(Enemy &e, int part, float by)
 {
   int sc = (int)scroll;
-  auto spark = [&](float x, float y) { fx.push_back({3, x, y, hs(t) * 6, 0, 5, false}); };
+  auto spark = [&](float x, float y) {
+    fx.push_back({3, x, y, hs(t) * 6, 0, 5, false});
+    sfx(Sfx::Ping);
+  };
   if (e.k == WELDER && e.st == 1) // たたんだ腕に弾が効かない
   {
     spark(e.x, e.y - 4);
@@ -824,6 +840,7 @@ void Game2::hitEnemy(Enemy &e, int part, float by)
       }
       e.seg[j] = 0;
     }
+    sfx(Sfx::Flak);
     e.st = 1;
     return;
   }
@@ -835,6 +852,8 @@ void Game2::hitEnemy(Enemy &e, int part, float by)
   }
   else
     e.hp--;
+  if (e.hp > 0)
+    sfx(Sfx::MomHit, 0.3f);
   if (e.k == WELDER && e.hp > 0 && ++e.cnt >= 3) // 続けて撃たれたので隠れる
   {
     e.st = 1;
@@ -854,6 +873,12 @@ void Game2::killEnemy(Enemy &e)
   if (mode == Mode::Play)
     score += p * (2 + e.lvl) / 2;
   bool ground = !isAir(e.k) && e.k != EYE;
+  if (e.k == CORE)
+    sfx(Sfx::CoreKill);
+  else if (e.k == BUG || e.k == MAINT)
+    sfx(Sfx::Flak, 0.7f);
+  else
+    sfx(Sfx::G2Boom, e.k == FORK || e.k == SCRAP || e.k == SNAKE ? 1 : 0.7f);
   if (e.k == BUG || e.k == CORE || e.k == MAINT)
     fx.push_back({5, e.x, e.y, hs(t) * 6, 0, 16, ground});
   else
@@ -865,6 +890,7 @@ void Game2::killEnemy(Enemy &e)
     Enemy &c = addEnemy(CORE, e.x, e.y);
     c.link = -1;
     c.lvl = 0;
+    sfx(Sfx::CoreFree);
   }
   // 弾を強くする部品: 大きい機械 (フォーク・ウェルダー・パイプヘビ) と、部品を運ぶメンテが落とす。ほかは 15 体ごと
   bool every = e.k != CORE && e.k != BUG && ++killCount % 15 == 0;
@@ -878,6 +904,8 @@ void Game2::bombBlast(float x, float y)
   const float BLAST = 38;
   int sc = (int)scroll;
   fx.push_back({6, x, y, 0, 0, 14, true});
+  sfx(Sfx::BigBoom, 0.6f);
+  sfx(Sfx::Virus);
   fx.push_back({0, x, y, hs(t) * 6, 0, 26, true});
   for (int i = 0; i < 3; i++)
     fx.push_back({5, x + (hs(t + i) - 0.5f) * 40, y + (hs(t * 3 + i) - 0.5f) * 30, hs(t + i * 5) * 6, -3 - i * 3, 14, true});

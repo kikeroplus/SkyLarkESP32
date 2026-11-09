@@ -23,6 +23,10 @@ public:
   char LastName[4] = "AAA";
   void (*TableChanged)() = nullptr; // ランキングが変わったら呼ぶ (main が保存する)
   bool WantMenu = false;            // 選択画面へ戻りたい
+  Sound *Snd = nullptr;
+  int VolumeLevel = 2;        // SW3 を短く押すたびに 1 段上げる (0 = OFF〜4)。SKYLARK と同じ設定 (vol5)
+  bool VolumeChanged = false; // main が音量を当てて保存する
+  void sfx(Sfx s, float vol = 1);
 
   uint32_t buildMs = 0;
   uint32_t profBg = 0, profAnim = 0, profObj = 0, profFore = 0, profBoss = 0, profEn = 0, profHud = 0; // 描く時間の内訳 (確かめる用。us の合計)
@@ -127,6 +131,8 @@ private:
   // 0 ガントリー (沈殿槽の天井クレーン) / 1 スタンパー (止まったプレス機) / 2 炉心 (溶鉱炉の跡、最後のボス)
   Boss boss;
   float spd = 0.55f;   // 今の流れる速さ
+  int volT = 0;        // 音量の目盛りを出す残り
+  void updateAmbience(); // 鳴り続ける音 (工場のうなり・溶鉱炉・小鳥・ボスのうなり)
   int bossBannerT = 0; // 「WARNING」や「倒した」を出す残り
   int bossResult = 0;  // 0 なし / 1 倒した / 2 逃げられた
   void startBoss(int k);

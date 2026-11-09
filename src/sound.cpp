@@ -445,16 +445,161 @@ void makeWaves()
     w[i] = (sinf(t * PI2 * (70 - 60 * t)) * 0.8f + dlp * 4) * expf(-t * 10);
   }
   set(Sfx::TankDrop, 0.4f);
+
+  // ---- 2 本目 (FOUNDRY) ----
+  // 戦車の青い弾: 高いところから下がる短いピュッ (連射するので小さく、短く)
+  w = newWave(0.09f);
+  float sph = 0;
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    sph += (1900 - 12000 * t) / SR;
+    w[i] = (sinf(sph * PI2) * 0.7f + square(sph) * 0.3f) * min(1.0f, t / 0.002f) * expf(-t * 38);
+  }
+  set(Sfx::G2Shot, 0.11f);
+  // 機械が壊れる: 爆発に、金属が打ち合うガシャンを重ねる
+  explosion(0.75f, 0.07f, 55);
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    tmp[i] += (sinf(t * PI2 * 310) + sinf(t * PI2 * 487) * 0.8f + sinf(t * PI2 * 733) * 0.6f) * expf(-t * 14) * 0.35f;
+  }
+  set(Sfx::G2Boom, 0.32f);
+  // 核が飛び出す: 震えながら上ずる電子音
+  w = newWave(0.35f);
+  float cph = 0;
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR, k = t / 0.35f;
+    cph += (600 + 1400 * k + 150 * sinf(t * PI2 * 30)) / SR;
+    w[i] = (square(cph) * 0.4f + sinf(cph * PI2) * 0.6f) * min(1.0f, t / 0.01f) * (1 - k);
+  }
+  set(Sfx::CoreFree, 0.1f);
+  // 核を撃ち落とした: ガラスを打ったようなチン
+  w = newWave(0.4f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    w[i] = (sinf(t * PI2 * 2093) + sinf(t * PI2 * 3136) * 0.6f) * expf(-t * 11) * 0.6f + noise() * expf(-t * 90) * 0.3f;
+  }
+  set(Sfx::CoreKill, 0.2f);
+  // 核が乗り移った: ぶるぶる震えながら下がる、こもったうなり
+  w = newWave(0.6f);
+  float pph = 0, plp = 0;
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR, k = t / 0.6f;
+    pph += (900 - 600 * k) / SR;
+    float saw = (pph - floorf(pph)) * 2 - 1;
+    plp += (saw * (0.6f + 0.4f * sinf(t * PI2 * 40)) - plp) * 0.25f;
+    w[i] = plp * min(1.0f, t / 0.02f) * powf(1 - k, 1.3f);
+  }
+  set(Sfx::Possess, 0.22f);
+  // ウイルス: 音の高さがでたらめに跳ぶ、デジタルのジジジ
+  w = newWave(0.8f);
+  float vph = 0, vf = 800;
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    if (i % (SR * 3 / 100) == 0)
+      vf = 400 + rnd01() * 2000;
+    vph += vf / SR;
+    float v = square(vph) * 0.5f + ((i / 40) % 2 ? 0.25f : -0.25f) * (rnd01() > 0.7f ? 1 : 0);
+    w[i] = v * min(1.0f, t / 0.01f) * powf(1 - t / 0.8f, 1.5f);
+  }
+  set(Sfx::Virus, 0.14f);
+  // 弾をはじいた: キン
+  w = newWave(0.14f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    w[i] = (sinf(t * PI2 * (2600 - 1200 * t)) + sinf(t * PI2 * 3900) * 0.5f) * expf(-t * 30) * 0.6f;
+  }
+  set(Sfx::Ping, 0.1f);
+  // 防犯カメラに見つかった: ピピッ
+  w = newWave(0.32f);
+  for (int b = 0; b < 2; b++)
+  {
+    int st = (int)(SR * b * 0.14f);
+    for (int i = 0; st + i < tmpN && i < SR * 0.09f; i++)
+    {
+      float t = (float)i / SR;
+      w[st + i] = (square(t * 1320) * 0.4f + sinf(t * PI2 * 1320) * 0.6f) * min(1.0f, t / 0.003f) * min(1.0f, (0.09f - t) / 0.01f);
+    }
+  }
+  set(Sfx::Alarm, 0.13f);
+  // 蒸気: シュー (高い雑音が吹き出して弱まる)
+  w = newWave(0.5f);
+  float slp2 = 0;
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR, n = noise();
+    slp2 += (n - slp2) * 0.5f;
+    w[i] = (n - slp2) * min(1.0f, t / 0.02f) * powf(1 - t / 0.5f, 1.5f);
+  }
+  set(Sfx::Steam, 0.12f);
+  // 戦車の足が着く: 小さなカシャ (サーボのカチッと、低いトン)
+  w = newWave(0.08f);
+  float flp2 = 0;
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    flp2 += (noise() - flp2) * 0.3f;
+    w[i] = (flp2 * 1.2f * expf(-t * 70) + sinf(t * PI2 * 170) * expf(-t * 45) * 0.6f + sinf(t * PI2 * 3100) * expf(-t * 160) * 0.3f);
+  }
+  set(Sfx::Step, 0.07f);
+  // フックやプレスが落ちる: ズシンと、鉄の響き
+  w = newWave(0.7f);
+  float mlp = 0;
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    mlp += (noise() - mlp) * 0.06f;
+    float body = tanhf(sinf(t * PI2 * (80 - 50 * t)) * 2.2f) * expf(-t * 7);
+    float ring = (sinf(t * PI2 * 220) + sinf(t * PI2 * 347) * 0.7f) * expf(-t * 6) * 0.3f;
+    w[i] = body * 0.8f + mlp * 4 * expf(-t * 9) + ring;
+  }
+  set(Sfx::Slam, 0.42f);
+  // 出発: 低めの、少し暗い工場らしい節
+  melody({-12, -5, 0, 3, 2, -2, 0}, {0.12f, 0.12f, 0.12f, 0.24f, 0.12f, 0.12f, 0.5f}, 0.25f);
+  set(Sfx::G2Start, 0.3f);
   free(tmp);
   tmp = nullptr;
 }
 
 // ---- 鳴りつづける音 ----
+// sinf は 1 回に 2〜3 us かかり、標本ごとに何回も呼ぶとコア 0 (液晶へ送る仕事も持っている) が埋まるので、
+// 鳴りつづける音のサインは表を引く (1024 分割、間はまっすぐつなぐ)。引数は「周」(1 周 = 0〜1)
+float SINT[1025];
+void initSin()
+{
+  for (int i = 0; i <= 1024; i++)
+    SINT[i] = sinf(i * PI2 / 1024);
+}
+inline float tsin(float cyc)
+{
+  cyc -= floorf(cyc);
+  float f = cyc * 1024;
+  int i = (int)f;
+  return SINT[i] + (SINT[i + 1] - SINT[i]) * (f - i);
+}
 float engPh, engLfo, ufoPh, ufoLfo, beamPh, momPh;
 float rainLp, rainHp, rainLp2, engOut, engOut2;
 float bird, birdPh, birdF, birdDf;
 int birdLeft, birdGap = SR;
 float curEngine, curRain, curUfo, curBeam, curMom, curBirds, curPitch = 1, curBank;
+float curHum, curRoar, humPh, humPh2, humLp, roarLp, roarLp2, roarAm = 1, roarAmS = 1;
+int roarN;
 
 inline float wrap(float ph) { return ph - floorf(ph); } // 位相は 0〜1 で持つ (float の桁が足りなくならないように)
 float toward(float cur, float target) { return cur + (target - cur) * 0.08f; }
@@ -477,7 +622,7 @@ float birdSample()
   birdPh = wrap(birdPh + birdF / SR);
   bird = min(1.0f, bird + 0.01f);
   float env = min(bird, min(1.0f, birdLeft / (SR * 0.01f)));
-  return sinf(birdPh * PI2) * env;
+  return tsin(birdPh) * env;
 }
 
 void loopSounds(float *mix, bool mute)
@@ -492,6 +637,8 @@ void loopSounds(float *mix, bool mute)
   curBeam = toward(curBeam, mute ? 0 : s.Beam);
   curMom = toward(curMom, mute ? 0 : s.MomHum);
   curBirds = toward(curBirds, mute ? 0 : s.Birds);
+  curHum = toward(curHum, mute ? 0 : s.Hum);
+  curRoar = toward(curRoar, mute ? 0 : s.Roar);
   for (int i = 0; i < BUF; i++)
   {
     float v = 0;
@@ -499,10 +646,10 @@ void loopSounds(float *mix, bool mute)
     {
       // プロペラ: 低いうなりに、羽根が空気をたたく脈を重ねる。音程は操作で変わり、旋回中はうなりが少し揺れる
       engLfo = wrap(engLfo + 7.0f / SR);
-      float f = 62 * curPitch * (1 + 0.012f * curBank * sinf(engLfo * PI2));
+      float f = 62 * curPitch * (1 + 0.012f * curBank * tsin(engLfo));
       engPh = wrap(engPh + f / SR);
       float saw = engPh * 2 - 1;
-      float sn = max(0.0f, sinf(engPh * 2 * PI2)), puls = sn * sn * sn;
+      float sn = max(0.0f, tsin(engPh * 2)), puls = sn * sn * sn;
       puls *= puls;
       engOut += (saw * 0.5f + puls - engOut) * 0.25f;
       engOut2 += (engOut - engOut2) * 0.12f; // 小さなスピーカーでは高い倍音がジーと耳につくので、もう 1 段こもらせる (約 400Hz から上を弱める)
@@ -520,13 +667,13 @@ void loopSounds(float *mix, bool mute)
     if (curUfo > 0.001f)
     {
       // 円盤: ゆらゆら揺れる高い音
-      ufoPh = wrap(ufoPh + (420 + 70 * sinf(ufoLfo * PI2)) / SR);
-      v += sinf(ufoPh * PI2) * 0.22f * curUfo;
+      ufoPh = wrap(ufoPh + (420 + 70 * tsin(ufoLfo)) / SR);
+      v += tsin(ufoPh) * 0.22f * curUfo;
     }
     if (curBeam > 0.001f)
     {
-      beamPh = wrap(beamPh + (880 + 40 * sinf(ufoLfo * 3 * PI2)) / SR);
-      v += (sinf(beamPh * PI2) + 0.5f * sinf(beamPh * 3 * PI2)) * 0.12f * curBeam;
+      beamPh = wrap(beamPh + (880 + 40 * tsin(ufoLfo * 3)) / SR);
+      v += (tsin(beamPh) + 0.5f * tsin(beamPh * 3)) * 0.12f * curBeam;
     }
     if (curMom > 0.001f)
     {
@@ -534,20 +681,41 @@ void loopSounds(float *mix, bool mute)
       momPh += 48.0f / SR;
       if (momPh >= 24)
         momPh -= 24;
-      float env = 0.6f + 0.4f * sinf(momPh * PI2 / 24);
-      v += (sinf(momPh * PI2) + 0.4f * sinf(momPh * 4.02f * PI2)) * env * 0.35f * curMom;
+      float env = 0.6f + 0.4f * tsin(momPh / 24);
+      v += (tsin(momPh) + 0.4f * tsin(momPh * 4.02f)) * env * 0.35f * curMom;
     }
     if (curBirds > 0.001f)
       v += birdSample() * 0.09f * curBirds; // 筐体で響くので半分に (0.18 → 0.09)
+    if (curHum > 0.001f)
+    {
+      // 工場のうなり: 少しずれた 2 つの低い音のうねりと、こもった空気の音
+      humPh = wrap(humPh + 110.0f / SR);
+      humPh2 = wrap(humPh2 + 110.6f / SR);
+      humLp += (noise() - humLp) * 0.02f;
+      v += ((tsin(humPh) + tsin(humPh2)) * 0.08f + humLp * 0.5f) * curHum;
+    }
+    if (curRoar > 0.001f)
+    {
+      // 溶鉱炉: 低い雑音が、炎のようにゆらぐ
+      if (++roarN >= SR / 12)
+      {
+        roarN = 0;
+        roarAm = 0.6f + rnd01() * 0.4f;
+      }
+      roarLp += (noise() - roarLp) * 0.05f;
+      roarLp2 += (roarLp - roarLp2) * 0.1f;
+      roarAmS += (roarAm - roarAmS) * 0.002f; // 急に変えるとプツッと鳴るので、なめらかに寄せる
+      v += roarLp2 * 2.2f * roarAmS * curRoar;
+    }
     mix[i] += v;
   }
 }
 
 // ---- 作った音をフラッシュ (LittleFS) に覚えておく ----
 // 作るのに 50 秒ほどかかるので、一度作ったら /sfx.bin に保存し、次からは読むだけにする (1.4MB ほど)。
-// 見出しに sound.cpp をビルドした日時を入れておき、音の作り方を変えて sound.cpp がビルドしなおされたら作りなおす
+// 見出しに版の番号 (CACHE_KEY) を入れておき、音の作り方を変えて番号を上げたら作りなおす
 const char *const CACHE = "/sfx.bin";
-const char CACHE_KEY[40] = "SKYLARK-SFX " __DATE__ " " __TIME__;
+const char CACHE_KEY[40] = "SKYLARK-SFX v2"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
 
 bool loadCache()
 {
@@ -599,6 +767,7 @@ void saveCache()
 
 void audioTask(void *)
 {
+  initSin();
   uint32_t t0 = millis();
   bool fs = LittleFS.begin(true); // はじめて使うときは領域を整える
   if (fs && loadCache())
@@ -626,6 +795,7 @@ void audioTask(void *)
   static int16_t out[BUF * 2];
   for (;;)
   {
+    uint32_t m0 = micros();
     memset(mix, 0, sizeof(mix));
     bool mute = self->Muted;
     portENTER_CRITICAL(&mux);
@@ -656,7 +826,9 @@ void audioTask(void *)
           voices[k].on = false;
       }
     portEXIT_CRITICAL(&mux);
+    uint32_t m1 = micros();
     loopSounds(mix, mute);
+    self->usLoop += micros() - m1;
     float m = mute ? 0 : self->Master;
     for (int i = 0; i < BUF; i++)
     {
@@ -665,6 +837,7 @@ void audioTask(void *)
       int16_t s = (int16_t)(max(-1.0f, min(1.0f, x)) * 30000);
       out[i * 2] = out[i * 2 + 1] = s;
     }
+    self->usMix += micros() - m0;
     size_t written;
     i2s_write(I2S_NUM_0, out, sizeof(out), &written, portMAX_DELAY); // DMA が空くまで待つので、これで速さが合う
   }

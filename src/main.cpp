@@ -227,6 +227,13 @@ void loadPrefs2()
   }
 }
 
+void applyVolume2() // 2 本目
+{
+  static const float MASTER[5] = {0, 0.12f, 0.25f, 0.5f, 1.0f};
+  snd.Muted = game2->VolumeLevel == 0;
+  snd.Master = MASTER[game2->VolumeLevel];
+}
+
 void applyVolume()
 {
   static const float MASTER[Game::VOL_LEVELS] = {0, 0.12f, 0.25f, 0.5f, 1.0f}; // OFF / 1〜4 (1 段ごとにおよそ倍)
@@ -440,7 +447,11 @@ void setup()
     if (!gfx.begin())
       Serial.println("gfx begin failed (memory)");
     disableCore0WDT();
+    snd.begin();
     game2 = new Game2();
+    game2->Snd = &snd;
+    game2->VolumeLevel = min(max((int)prefs.getInt("vol5", 2), 0), 4); // SKYLARK と同じ設定
+    applyVolume2();
     if (!game2->begin())
       Serial.println("game2 begin failed (psram)");
     loadPrefs2();
@@ -486,6 +497,12 @@ void loop2()
     game2->Step(readInput());
     if (game2->WantMenu)
       ESP.restart();
+    if (game2->VolumeChanged)
+    {
+      game2->VolumeChanged = false;
+      applyVolume2();
+      prefs.putInt("vol5", game2->VolumeLevel);
+    }
     stepUs += micros() - t0;
     next += 1000 / Game2::FPS + ((next % 3) == 0 ? 1 : 0);
     n++;
@@ -500,6 +517,8 @@ void loop2()
                   f * 1000.0f / (millis() - lastLog));
     Serial.printf("  bg %lu  anim %lu  objects %lu (boss %lu  enemies %lu  hud %lu)  fore %lu  en %u\n", game2->profBg / f, game2->profAnim / f,
                   game2->profObj / f, game2->profBoss / f, game2->profEn / f, game2->profHud / f, game2->profFore / f, game2->enemyCount());
+    Serial.printf("  audio %lu us/s (loops %lu)\n", snd.usMix * 1000 / (millis() - lastLog), snd.usLoop * 1000 / (millis() - lastLog));
+    snd.usMix = snd.usLoop = 0;
     game2->profBg = game2->profAnim = game2->profObj = game2->profFore = game2->profBoss = game2->profEn = game2->profHud = 0;
     drawUs = drawMax = stepUs = frames = 0;
     gfx.usPush = 0;

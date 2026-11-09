@@ -56,6 +56,7 @@ void Game2::startBoss(int k)
   boss.y = -90;
   bossBannerT = 3 * FPS;
   bossResult = 0;
+  sfx(Sfx::Warning);
   float m = 1 + 0.5f * min(lap, 2); // 2 周目からは硬い
   auto set = [&](int i, int hp) { boss.hp[i] = boss.maxhp[i] = (int)(hp * m); };
   if (k == 0)
@@ -121,19 +122,24 @@ void Game2::bossHurt(int part, int dmg)
   B.hp[part] -= dmg;
   B.hit[part] = 3;
   if (B.hp[part] > 0)
+  {
+    sfx(Sfx::MomHit, 0.3f);
     return;
+  }
   B.hp[part] = 0;
   float x, y;
   partPos(B, part, t, tx, ty, x, y);
   fx.push_back({0, x, y, hs(t) * 6, 0, 26, false});
   if (part > 0)
   {
+    sfx(Sfx::BigBoom, 0.7f);
     if (mode == Mode::Play)
       score += 1000;
     return;
   }
   // 倒した
   B.dieT = 1;
+  sfx(Sfx::Crash);
   bossResult = 1;
   bossBannerT = 4 * FPS;
   if (mode == Mode::Play)
@@ -184,7 +190,10 @@ void Game2::bossStep()
   bool canShoot = tankOn && enterT == 0;
   auto shoot = [&](float x, float y, float a, float s, int k) {
     if (eb.size() < 30)
+    {
       eb.push_back({x, y, cosf(a) * s, sinf(a) * s, false, k, 0});
+      sfx(k == 2 ? Sfx::Flak : Sfx::EnemyShot, 0.5f);
+    }
   };
   float bs = 1.6f + 0.3f * min(lap, 2); // 弾の速さ
   auto per = [&](int base) { return lap > 0 ? base * 3 / 4 : base; };
@@ -224,6 +233,7 @@ void Game2::bossStep()
       if (c == 50)
       {
         fx.push_back({5, B.x, B.hookY, hs(t) * 6, 0, 16, false});
+        sfx(Sfx::Slam);
         if (hittable && hypotf(tx - B.x, ty - B.hookY) < 16)
           killTank();
       }
@@ -302,6 +312,7 @@ void Game2::bossStep()
     if (c == 68) // ヘッドを落とす: 衝撃波
     {
       B.ringOn = true;
+      sfx(Sfx::Slam);
       B.ringR = 8;
       B.ringX = B.x;
       B.ringY = B.y + 6;
@@ -358,6 +369,7 @@ void Game2::bossStep()
         float y = side < 2 ? 150 + hs(t + 1) * 120 : H + 8;
         Enemy &c = addEnemy(CORE, x, y);
         c.link = -2; // 炉心の目へ向かう
+        sfx(Sfx::CoreFree);
         c.lvl = 0;
       }
       if (B.tm > 220)
@@ -374,7 +386,10 @@ bool Game2::bossShot(float x, float y)
   Boss &B = boss;
   if (B.k < 0 || B.dieT > 0)
     return false;
-  auto spark = [&]() { fx.push_back({3, x, y, hs(t) * 6, 0, 5, false}); };
+  auto spark = [&]() {
+    fx.push_back({3, x, y, hs(t) * 6, 0, 5, false});
+    sfx(Sfx::Ping);
+  };
   if (B.enterT > 0)
     return false;
   if (B.k == 0)
