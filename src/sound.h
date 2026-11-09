@@ -50,6 +50,8 @@ enum class Sfx
   Step,     // 戦車の足が着く: カシャ
   Slam,     // フックやプレスが落ちる: ズシン
   G2Start,  // 出発: 工場らしい短い節
+  PileDrive, // 背景: 遠くのくい打ち (ガーン)
+  MachClank, // 背景: 遠くの大きな機械 (ガシャン・シュー)
   Count
 };
 

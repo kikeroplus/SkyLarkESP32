@@ -35,8 +35,21 @@ void Game2::updateAmbience()
   bool quiet = paused || mode == Mode::Continue || mode == Mode::NameEntry;
   int z = lastZone < 0 ? 0 : lastZone;
   float k = quiet ? 0 : mode == Mode::Attract ? 0.5f : 1;
-  Snd->Birds = z == 0 ? 0.6f * k : 0;
-  Snd->Hum = (z == 0 ? 0.35f : z == 7 ? 0.5f : 1.0f) * k;
+  Snd->Birds = 0;
+  Snd->Hum = (z == 0 ? 0.5f : z == 7 ? 0.6f : 1.0f) * k;
+  if (k > 0) // 遠くのくい打ち (ガーン、ときどきガーン、ガーン) と、大きな機械 (ガシャン・シュー)
+  {
+    if (--pileT <= 0)
+    {
+      Snd->Play(Sfx::PileDrive, (0.5f + hs(t) * 0.5f) * k);
+      pileT = hs(t * 1.7f) < 0.3f ? 14 : 36 + (int)(hs(t * 2.3f) * 20);
+    }
+    if (--clankT <= 0)
+    {
+      Snd->Play(Sfx::MachClank, (0.5f + hs(t + 9) * 0.5f) * k);
+      clankT = 80 + (int)(hs(t * 3.1f) * 90);
+    }
+  }
   Snd->Roar = z == 7 ? 1.0f * k : 0;
   Snd->MomHum = boss.k >= 0 && boss.dieT == 0 ? 0.55f * k : 0;
 }

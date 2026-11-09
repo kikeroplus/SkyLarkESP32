@@ -132,6 +132,7 @@ private:
   Boss boss;
   float spd = 0.55f;   // 今の流れる速さ
   int volT = 0;        // 音量の目盛りを出す残り
+  int pileT = 40, clankT = 90; // 背景のくい打ち・大きな機械が次に鳴るまで
   void updateAmbience(); // 鳴り続ける音 (工場のうなり・溶鉱炉・小鳥・ボスのうなり)
   int bossBannerT = 0; // 「WARNING」や「倒した」を出す残り
   int bossResult = 0;  // 0 なし / 1 倒した / 2 逃げられた
