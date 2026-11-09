@@ -18,10 +18,21 @@ ESP32-S3-DevKitC-1 N16R8。液晶・SW1〜SW3・アンプは Livico と同じ配
 
 ## 書き込み
 
+液晶は 2 種類あり、液晶に合わせてファーム (PlatformIO の env) を選ぶ。BL のほかの配線は同じ。
+
+| 液晶 | ゲーム | ジョイスティックの試験 (横置きの画面) |
+|---|---|---|
+| BL 端子なし (Livico と同じ。色反転 true) | `game_nobl` | `joytest_nobl` |
+| BL 端子あり (InfoPanel 初号機・TFT-VUMeterTester-240-320 と同じ。色反転 false、BL は **GPIO7**。3.3V に直結してもよい) | `game_bl` | `joytest_bl` |
+
 ```
-pio run -t upload                 ゲーム
-pio run -e joytest -t upload      ジョイスティックの試験 (横置きの画面)
+pio run -e game_nobl -t upload     ゲーム (BL なしの液晶)
+pio run -e game_bl -t upload       ゲーム (BL ありの液晶)
 ```
+
+`pio run -t upload` や VS Code の書き込みボタンは `game_nobl` を書き込む。BL ありの液晶のときは、ステータスバーの env を `game_bl` に切り替えてから書き込む。
+映らない (BL ありの液晶に `game_nobl` を書いた) ときや、色が反転して見えるときは、もう一方のファームを書き込む。
+液晶へは両方とも 80MHz で送る。乱れるときは `-DTFT_SPI_HZ=40000000` を足して下げる。
 
 書き込みもシリアルも、基板の内蔵 USB で通る。書き込めなくなったら BOOT を押したまま RESET を押して離し、書き込んだあと RESET を押す。
 内蔵 USB は TinyUSB で動かしている (`ARDUINO_USB_MODE=0`)。シリアルは、PC 側が DTR を立てて開いたときだけ出る (`tools/snap.py` は立てて開く)。

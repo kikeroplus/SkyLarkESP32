@@ -8,7 +8,19 @@
 #define TFT_CS   10
 #define TFT_DC   9
 #define TFT_RST  8
-#define TFT_IPS      true
+// 液晶の種類で変わるところ。platformio.ini の環境 (game_nobl / game_bl など) から -D で上書きする
+// TFT_IPS: Livico の液晶は true。色が反転して見える液晶 (TFT-VUMeterTester で使った ST7789V) は false
+#ifndef TFT_IPS
+#define TFT_IPS true
+#endif
+// TFT_BL: バックライトの端子をつなぐピン。-1 = つながない (Livico の液晶は BL が無い / 3.3V に直結)
+#ifndef TFT_BL
+#define TFT_BL -1
+#endif
+// TFT_SPI_HZ: 液晶へ送る速さ。どちらの液晶も 80MHz (いちばん速い)。映らない・乱れるときだけ -DTFT_SPI_HZ=40000000 で下げる
+#ifndef TFT_SPI_HZ
+#define TFT_SPI_HZ 80000000
+#endif
 #define TFT_ROTATION 0 // 縦置き 240x320。上下が逆なら 2
 
 // ---- スイッチ (片側 GND、押すと LOW) ----

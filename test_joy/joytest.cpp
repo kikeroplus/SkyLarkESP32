@@ -1,4 +1,4 @@
-// SkyLarkESP32 ジョイスティックの試験 (pio run -e joytest -t upload)
+// SkyLarkESP32 ジョイスティックの試験 (pio run -e joytest_nobl -t upload または joytest_bl)
 // VRX・VRY の値、倒した位置、ゲームで使う 8 方向、押し込み (SW) と SW1〜SW3 を画面とシリアルに出す
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
@@ -217,6 +217,11 @@ void draw()
 void setup()
 {
   Serial.begin(115200);
+  if (TFT_BL >= 0)
+  {
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, HIGH);
+  }
   if (!cv->begin(40000000))
     Serial.println("canvas begin failed");
   for (Button &b : buttons)

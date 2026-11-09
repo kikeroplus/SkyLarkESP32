@@ -411,7 +411,12 @@ int chooseMode()
 void setup()
 {
   Serial.begin(921600);
-  if (!panel->begin(80000000))
+  if (TFT_BL >= 0)
+  {
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, HIGH); // バックライトを点ける
+  }
+  if (!panel->begin(TFT_SPI_HZ))
     Serial.println("panel begin failed");
   panel->fillScreen(0x0000);
   panel->setTextColor(to565(0xF0C860));
