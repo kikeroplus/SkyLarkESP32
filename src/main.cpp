@@ -9,6 +9,8 @@
 #include "game.h"
 #include "padmode.h"
 #include "game2.h"
+#include "game3.h"
+#include "game4.h"
 #include <algorithm>
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCK, TFT_MOSI, TFT_MISO);
@@ -16,6 +18,8 @@ Arduino_GFX *panel = new Arduino_ST7789(bus, TFT_RST, TFT_ROTATION, TFT_IPS, 240
 Gfx gfx;
 Game *game = nullptr;
 Game2 *game2 = nullptr; // 2 本目を選んだときだけ作る
+Game3 *game3 = nullptr; // 3 本目を選んだときだけ作る
+Game4 *game4 = nullptr; // 4 本目を選んだときだけ作る
 Sound snd;
 Preferences prefs;
 
@@ -227,6 +231,96 @@ void loadPrefs2()
   }
 }
 
+// 3 本目のランキングと名前は、名前空間 longshot に残す
+Preferences prefs3;
+void saveTable3()
+{
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    prefs3.putInt(k, game3->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    prefs3.putString(k, game3->Table[i].Name);
+  }
+  prefs3.putString("name", game3->LastName);
+}
+
+void loadPrefs3()
+{
+  prefs3.begin("longshot", false);
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    if (!prefs3.isKey(k))
+      continue;
+    game3->Table[i].Score = prefs3.getInt(k, game3->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    String n = prefs3.getString(k, game3->Table[i].Name);
+    strncpy(game3->Table[i].Name, n.c_str(), 3);
+    game3->Table[i].Name[3] = 0;
+  }
+  if (prefs3.isKey("name"))
+  {
+    String n = prefs3.getString("name", "AAA");
+    strncpy(game3->LastName, n.c_str(), 3);
+    game3->LastName[3] = 0;
+  }
+}
+
+// 4 本目のランキング (打数) と名前は、名前空間 corners に残す
+Preferences prefs4;
+void saveTable4()
+{
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    prefs4.putInt(k, game4->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    prefs4.putString(k, game4->Table[i].Name);
+  }
+  prefs4.putString("name", game4->LastName);
+}
+
+void loadPrefs4()
+{
+  prefs4.begin("corners", false);
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    if (!prefs4.isKey(k))
+      continue;
+    game4->Table[i].Score = prefs4.getInt(k, game4->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    String n = prefs4.getString(k, game4->Table[i].Name);
+    strncpy(game4->Table[i].Name, n.c_str(), 3);
+    game4->Table[i].Name[3] = 0;
+  }
+  if (prefs4.isKey("name"))
+  {
+    String n = prefs4.getString("name", "AAA");
+    strncpy(game4->LastName, n.c_str(), 3);
+    game4->LastName[3] = 0;
+  }
+}
+
+void applyVolume4() // 4 本目
+{
+  static const float MASTER[5] = {0, 0.12f, 0.25f, 0.5f, 1.0f};
+  snd.Muted = game4->VolumeLevel == 0;
+  snd.Master = MASTER[game4->VolumeLevel];
+}
+
+void applyVolume3() // 3 本目
+{
+  static const float MASTER[5] = {0, 0.12f, 0.25f, 0.5f, 1.0f};
+  snd.Muted = game3->VolumeLevel == 0;
+  snd.Master = MASTER[game3->VolumeLevel];
+}
+
 void applyVolume2() // 2 本目
 {
   static const float MASTER[5] = {0, 0.12f, 0.25f, 0.5f, 1.0f};
@@ -253,7 +347,11 @@ void drawFrame()
   for (int s = 0; s < STRIPS; s++)
   {
     gfx.startStrip(s);
-    if (game2)
+    if (game4)
+      game4->Draw(gfx);
+    else if (game3)
+      game3->Draw(gfx);
+    else if (game2)
       game2->Draw(gfx);
     else
       game->Draw(gfx);
@@ -282,8 +380,20 @@ void serialCommands()
       snapshot = true;
     else if (c == 'n')
       kSw1.hit = true;
+    else if (c == 'z' && game4) // 4 本目: 的玉を 1 個だけ残す
+      game4->debugClear();
+    else if (c == 'a' && game4) // 4 本目: 自動で打つを切り替える
+      game4->autoPlay = !game4->autoPlay;
     else if (c == 'z' && game2) // 2 本目: 次の区画へ
       game2->skipZone();
+    else if (c == 'z' && game3) // 3 本目: 今の面をしとめたことにする
+      game3->skipStage();
+    else if (c >= '0' && c <= '9' && game3) // 3 本目: その番号の面へ飛ぶ
+      game3->debugStage(c - '0');
+    else if (c == 'o' && game3) // 3 本目: スコープ
+      game3->debugScope();
+    else if (c == 't' && game3) // 3 本目: 照準を標的へ
+      game3->debugAimTarget();
     else if (c == 'a' && game2) // 2 本目: 自動で遊ぶ (やられない) を切り替える
       game2->autoPilot = !game2->autoPilot;
     else if (!game)
@@ -299,12 +409,12 @@ void serialCommands()
   }
 }
 
-// ---- 起動の選択画面: SKYLARK か、2 本目 (FOUNDRY) か、ジョイスティック (PC の USB ゲームパッド) か ----
+// ---- 起動の選択画面: SKYLARK か、2 本目 (FOUNDRY) か、3 本目 (LONGSHOT) か、4 本目 (CORNERS) か、ジョイスティック (PC の USB ゲームパッド) か ----
 // 前回選んだものを選んでおき、触らなければ 3 秒で始める。スティックの上下 (SW2 でも) で選び、SW1 か押し込みで決める
-// 保存する番号は前からのまま (0 = SKYLARK、1 = ジョイスティック)。2 本目は 2。画面の並びは MENU_ORDER
-const int MODE_GAME = 0, MODE_PAD = 1, MODE_G2 = 2;
-const int MENU_N = 3;
-const int MENU_ORDER[MENU_N] = {MODE_GAME, MODE_G2, MODE_PAD};
+// 保存する番号は前からのまま (0 = SKYLARK、1 = ジョイスティック)。2 本目は 2、3 本目は 3、4 本目は 4。画面の並びは MENU_ORDER
+const int MODE_GAME = 0, MODE_PAD = 1, MODE_G2 = 2, MODE_G3 = 3, MODE_G4 = 4;
+const int MENU_N = 5;
+const int MENU_ORDER[MENU_N] = {MODE_GAME, MODE_G2, MODE_G3, MODE_G4, MODE_PAD};
 const int MENU_AUTO_MS = 3000;
 
 void drawMenu(int sel)
@@ -314,22 +424,22 @@ void drawMenu(int sel)
   panel->setTextColor(to565(0xF0C860));
   panel->setCursor(LW / 2 - 63, 40);
   panel->print("SKYLARK");
-  static const char *NAME[] = {"SKYLARK", "FOUNDRY", "JOYSTICK"};
-  static const char *SUB[] = {"PLAY SKYLARK", "HEXAPOD TANK (WIP)", "USB GAMEPAD FOR PC"};
+  static const char *NAME[] = {"SKYLARK", "FOUNDRY", "LONGSHOT", "CORNERS", "JOYSTICK"};
+  static const char *SUB[] = {"PLAY SKYLARK", "HEXAPOD TANK", "SNIPER (WIP)", "POOL: CORNER POCKETS", "USB GAMEPAD FOR PC"};
   for (int i = 0; i < MENU_N; i++)
   {
-    int y = 92 + i * 64;
+    int y = 74 + i * 42;
     bool on = i == sel;
-    panel->fillRoundRect(24, y, LW - 48, 54, 8, to565(on ? 0xF0C860 : 0x0A111C));
+    panel->fillRoundRect(24, y, LW - 48, 37, 8, to565(on ? 0xF0C860 : 0x0A111C));
     if (!on)
-      panel->drawRoundRect(24, y, LW - 48, 54, 8, to565(0x1C3448));
+      panel->drawRoundRect(24, y, LW - 48, 37, 8, to565(0x1C3448));
     panel->setTextSize(2);
     panel->setTextColor(to565(on ? 0x04070C : 0xD8E6F0));
-    panel->setCursor(LW / 2 - (int)strlen(NAME[i]) * 6, y + 10);
+    panel->setCursor(LW / 2 - (int)strlen(NAME[i]) * 6, y + 5);
     panel->print(NAME[i]);
     panel->setTextSize(1);
     panel->setTextColor(to565(on ? 0x04070C : 0x5A7084));
-    panel->setCursor(LW / 2 - (int)strlen(SUB[i]) * 3, y + 34);
+    panel->setCursor(LW / 2 - (int)strlen(SUB[i]) * 3, y + 25);
     panel->print(SUB[i]);
   }
   panel->setTextSize(1);
@@ -373,6 +483,12 @@ int chooseMode()
       armed = true;
     else if (armed)
       break;
+    int sc = Serial.available() ? Serial.read() : -1; // 確かめる用: シリアルの 1〜5 で、画面の並びのその項目を選ぶ
+    if (sc >= '1' && sc < '1' + MENU_N)
+    {
+      sel = sc - '1';
+      break;
+    }
     if ((up && !wasUp) || (down && !wasDown) || (sw2 && !wasSw2))
     {
       sel = up ? (sel + MENU_N - 1) % MENU_N : (sel + 1) % MENU_N;
@@ -439,6 +555,57 @@ void setup()
   int mode = chooseMode();
   if (mode == MODE_PAD)
     runPadMode(panel); // 戻らない
+  if (mode == MODE_G4)
+  {
+    panel->setTextSize(3);
+    panel->setTextColor(to565(0xE0B050));
+    panel->setCursor(LW / 2 - 63, LH / 2 - 20);
+    panel->print("CORNERS");
+    panel->setTextSize(1);
+    panel->setTextColor(to565(0xDCD8CF));
+    panel->setCursor(LW / 2 - 30, LH / 2 + 16);
+    panel->print("LOADING...");
+    if (!gfx.begin())
+      Serial.println("gfx begin failed (memory)");
+    disableCore0WDT();
+    snd.begin();
+    game4 = new Game4();
+    game4->Snd = &snd;
+    game4->VolumeLevel = min(max((int)prefs.getInt("vol5", 2), 0), 4); // SKYLARK と同じ設定
+    applyVolume4();
+    uint32_t b0 = millis();
+    if (!game4->begin())
+      Serial.println("game4 begin failed (psram)");
+    loadPrefs4();
+    game4->TableChanged = saveTable4;
+    Serial.printf("game4 table built in %lu ms  heap %u  psram %u\n", millis() - b0, ESP.getFreeHeap(), ESP.getFreePsram());
+    return;
+  }
+  if (mode == MODE_G3)
+  {
+    panel->setTextSize(3);
+    panel->setTextColor(to565(0xD9A441));
+    panel->setCursor(LW / 2 - 72, LH / 2 - 20);
+    panel->print("LONGSHOT");
+    panel->setTextSize(1);
+    panel->setTextColor(to565(0xDCD8CF));
+    panel->setCursor(LW / 2 - 30, LH / 2 + 16);
+    panel->print("LOADING...");
+    if (!gfx.begin())
+      Serial.println("gfx begin failed (memory)");
+    disableCore0WDT();
+    snd.begin();
+    game3 = new Game3();
+    game3->Snd = &snd;
+    game3->VolumeLevel = min(max((int)prefs.getInt("vol5", 2), 0), 4); // SKYLARK と同じ設定
+    applyVolume3();
+    if (!game3->begin())
+      Serial.println("game3 begin failed (psram)");
+    loadPrefs3();
+    game3->TableChanged = saveTable3;
+    Serial.printf("game3 world built in %lu ms  heap %u  psram %u\n", game3->buildMs, ESP.getFreeHeap(), ESP.getFreePsram());
+    return;
+  }
   if (mode == MODE_G2)
   {
     panel->setTextSize(3);
@@ -531,8 +698,104 @@ void loop2()
   }
 }
 
+// 3 本目: 1 秒 30 回進めて描く。デモの画面で SW3 を長く押すと選択画面へ戻る (再起動)
+void loop3()
+{
+  static uint32_t next = millis();
+  static uint32_t lastLog = millis();
+  pollInput();
+  serialCommands();
+  uint32_t now = millis();
+  if ((int32_t)(now - next) < 0)
+    return;
+  int n = 0;
+  while ((int32_t)(now - next) >= 0 && n < 2)
+  {
+    uint32_t t0 = micros();
+    game3->Step(readInput());
+    if (game3->WantMenu)
+      ESP.restart();
+    if (game3->VolumeChanged)
+    {
+      game3->VolumeChanged = false;
+      applyVolume3();
+      prefs.putInt("vol5", game3->VolumeLevel);
+    }
+    stepUs += micros() - t0;
+    next += 1000 / Game3::FPS + ((next % 3) == 0 ? 1 : 0);
+    n++;
+  }
+  if ((int32_t)(now - next) >= 0)
+    next = now + 33;
+  drawFrame();
+  if (millis() - lastLog >= 5000 && frames > 0)
+  {
+    uint32_t f = frames;
+    Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f  (scene %lu hud %lu)\n", drawUs / f, drawMax, gfx.usPush / f,
+                  stepUs / f, f * 1000.0f / (millis() - lastLog), game3->profObj / f, game3->profHud / f);
+    Serial.printf("  audio %lu us/s (loops %lu)\n", snd.usMix * 1000 / (millis() - lastLog), snd.usLoop * 1000 / (millis() - lastLog));
+    snd.usMix = snd.usLoop = 0;
+    game3->profObj = game3->profHud = 0;
+    drawUs = drawMax = stepUs = frames = 0;
+    gfx.usPush = 0;
+    lastLog = millis();
+  }
+}
+
+// 4 本目: 1 秒 30 回進めて描く。デモの画面で SW3 を長く押すと選択画面へ戻る (再起動)
+void loop4()
+{
+  static uint32_t next = millis();
+  static uint32_t lastLog = millis();
+  pollInput();
+  serialCommands();
+  uint32_t now = millis();
+  if ((int32_t)(now - next) < 0)
+    return;
+  int n = 0;
+  while ((int32_t)(now - next) >= 0 && n < 2)
+  {
+    uint32_t t0 = micros();
+    game4->Step(readInput());
+    if (game4->WantMenu)
+      ESP.restart();
+    if (game4->VolumeChanged)
+    {
+      game4->VolumeChanged = false;
+      applyVolume4();
+      prefs.putInt("vol5", game4->VolumeLevel);
+    }
+    stepUs += micros() - t0;
+    next += 1000 / Game4::FPS + ((next % 3) == 0 ? 1 : 0);
+    n++;
+  }
+  if ((int32_t)(now - next) >= 0)
+    next = now + 33;
+  drawFrame();
+  if (millis() - lastLog >= 5000 && frames > 0)
+  {
+    uint32_t f = frames;
+    Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f  (game draw %lu)\n", drawUs / f, drawMax, gfx.usPush / f,
+                  stepUs / f, f * 1000.0f / (millis() - lastLog), game4->profDraw / f);
+    game4->profDraw = 0;
+    drawUs = drawMax = stepUs = frames = 0;
+    gfx.usPush = 0;
+    lastLog = millis();
+  }
+}
+
 void loop()
 {
+  if (game4)
+  {
+    loop4();
+    return;
+  }
+  if (game3)
+  {
+    loop3();
+    return;
+  }
   if (game2)
   {
     loop2();

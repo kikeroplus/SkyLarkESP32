@@ -52,6 +52,27 @@ enum class Sfx
   G2Start,  // 出発: 工場らしい短い節
   PileDrive, // 背景: 遠くのくい打ち (ガーン)
   MachClank, // 背景: 遠くの大きな機械 (ガシャン・シュー)
+  // 3 本目 (LONGSHOT)
+  Rifle,   // 狙撃銃: 鋭いパーンと、ビルに返るこだま
+  Bolt,    // ボルトを引いて弾をこめる: カチャ・カチッ
+  Impact,  // 弾が遠くに当たる: こもったトッ
+  Glass,   // 窓ガラスが割れる: パリン
+  Clank,   // 車に当たる: カン
+  Flutter, // 鳩が飛び立つ: バタバタ
+  Heart,   // 息を止めているあいだの心臓: ドクン
+  Exhale,  // 息を吐く: はぁ
+  ScopeIn, // スコープをのぞく: カチ
+  Mission, // 指令: 張りつめた短い節
+  Clear,   // 標的をしとめた
+  Fail,    // 失敗
+  Horn,    // 車のクラクション
+  Crowd,   // 人々のざわめき
+  // 4 本目 (CORNERS)
+  CueHit,    // キューで突く: コッ
+  BallClick, // 玉どうし: カチッ
+  Cushion,   // クッション: トッ
+  Pocket,    // ポケットに落ちる: ゴトン、ゴロゴロ
+  Rack,      // 玉を並べる: ガラガラ
   Count
 };
 
@@ -61,6 +82,7 @@ public:
   // 鳴りつづける音の大きさ (0〜1)。ゲームが書き、音のタスクが読む
   volatile float Engine = 0, Rain = 0, UfoHum = 0, Beam = 0, MomHum = 0, Birds = 0;
   volatile float Hum = 0, Roar = 0; // 2 本目: 工場の低いうなり、溶鉱炉のごうごう
+  volatile float City = 0, WindS = 0; // 3 本目: 街の遠いざわめき (車の流れ)、風の音
   volatile float EnginePitch = 1, EngineBank = 0; // プロペラの音程 (1 = ふつう) と旋回の度合い (0〜1)
   volatile float Master = 1;
   volatile bool Muted = false;

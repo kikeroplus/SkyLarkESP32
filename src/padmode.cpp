@@ -1,7 +1,7 @@
 // ジョイスティックのモード: この機体を PC の USB ゲームパッドにする (ESP32/JoyStick と同じ動き)。
 // スティック → 左スティック (X/Y 軸)、SW1 → ボタン 1、SW2 → ボタン 2、SW3 → ボタン 3、押し込み → ボタン 4。
 // 向きはゲームと同じ (縦置きで持ったときの上下左右)。SW3 を 2 秒押し続けると中央を取り直す。
-// SW1 と SW2 を 2 秒押し続けると再起動して、起動の選択画面に戻る。
+// SW1 と SW3 を 2 秒押し続けると再起動して、起動の選択画面に戻る。
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
 #include "USB.h"
@@ -113,8 +113,8 @@ void poll()
       bits |= 1u << i;
   }
 
-  // SW1 + SW2 長押しで、選択画面に戻る
-  if (held(buttons[0].down && buttons[1].down, exitSince))
+  // SW1 + SW3 長押しで、選択画面に戻る
+  if (held(buttons[0].down && buttons[2].down, exitSince))
   {
     pad.send(0, 0, 0, 0, 0, 0, HAT_CENTER, 0); // 押したままにならないように離してから
     delay(50);
@@ -199,13 +199,13 @@ void draw()
   if (now < calShownUntil)
     text(12, H - 16, C_GREEN, "CENTER SET");
   else if (exitSince)
-    text(12, H - 16, C_YELLOW, "HOLD SW1+SW2: MENU %d", (int)(HOLD_MS - (now - exitSince) + 999) / 1000);
+    text(12, H - 16, C_YELLOW, "HOLD SW1+SW3: MENU %d", (int)(HOLD_MS - (now - exitSince) + 999) / 1000);
   else if (calSince && !calDone)
     text(12, H - 16, C_YELLOW, "HOLD SW3: CENTER %d", (int)(HOLD_MS - (now - calSince) + 999) / 1000);
   else
   {
     text(12, H - 28, C_DIM, "SW3 HOLD 2s = CENTER");
-    text(12, H - 16, C_DIM, "SW1+SW2 HOLD 2s = MENU");
+    text(12, H - 16, C_DIM, "SW1+SW3 HOLD 2s = MENU");
   }
   text(W - 48, H - 16, C_DIM, "%7lu", (unsigned long)reports);
   cv->flush();
