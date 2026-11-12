@@ -214,6 +214,7 @@ void Game4::rack()
   aimP = 0;
   aiT = 0;
   scratched = false;
+  needCenter = false;
 }
 
 void Game4::respotCue()
@@ -473,7 +474,7 @@ void Game4::strike(float dx, float dy, float p)
   aiming = false;
 }
 
-// ---- 狙う: 倒した向きの反対へ、倒した量の強さで。はね戻った瞬間に打つ ----
+// ---- 狙う: 倒した向きの反対へ、倒した量の強さで。はね戻った瞬間か、倒したまま SW1 を押すと打つ ----
 void Game4::stepAimInput(const Input &in)
 {
   float sx = in.AX, sy = in.AY; // 右・下が正 (画面と同じ)
@@ -483,6 +484,14 @@ void Game4::stepAimInput(const Input &in)
     sx /= m;
     sy /= m;
     m = 1;
+  }
+  // SW1 で打ったあとは、スティックがいったん中央へ戻るまで構えない (倒したまま待っていて、戻したときに打たないように)
+  if (needCenter)
+  {
+    if (m < 0.1f)
+      needCenter = false;
+    prevM = m;
+    return;
   }
   if (!aiming && m >= P_MIN)
   {
@@ -511,7 +520,12 @@ void Game4::stepAimInput(const Input &in)
     }
     else
       heldAge++;
-    if (m < 0.1f)
+    if (in.FirePressed && aimP >= P_MIN) // SW1: いま構えている向きと強さで打つ
+    {
+      strike(aimDx, aimDy, aimP);
+      needCenter = true;
+    }
+    else if (m < 0.1f)
     {
       if (heldAge <= 3 && aimP >= P_MIN)
         strike(aimDx, aimDy, aimP);
@@ -1074,7 +1088,7 @@ void Game4::drawOverlay(Gfx &g)
     if (strokes == 0 && !aiming && phase == Phase::Aim)
     {
       txt(g, W / 2, 262, CREAM, "PULL THE STICK BACK", true);
-      txt(g, W / 2, 274, CREAM, "AND LET GO TO SHOOT", true);
+      txt(g, W / 2, 274, CREAM, "AND LET GO (OR SW1)", true);
     }
     if (autoPlay)
       txt(g, 5, 26, MUTE, "AUTO");

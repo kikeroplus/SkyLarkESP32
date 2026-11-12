@@ -884,6 +884,202 @@ void makeWaves()
     }
   }
   set(Sfx::Rack, 0.18f);
+
+  // ---- 5 本目 (ORBIT) ----
+  // フリッパー: ソレノイドのカシャッ (短い雑音、低いドッ、金属のカチ)
+  w = newWave(0.12f);
+  {
+    float flp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      float t = (float)i / SR;
+      flp += (noise() - flp) * 0.35f;
+      w[i] = flp * 2.2f * expf(-t * 90) + tanhf(sinf(t * PI2 * 95) * 2) * expf(-t * 45) * 0.7f + sinf(t * PI2 * 2600) * expf(-t * 160) * 0.3f;
+    }
+  }
+  set(Sfx::Flipper, 0.22f);
+  // バンパー: ポン (下がる低い音を歪ませ、高い響きを足す)
+  w = newWave(0.28f);
+  {
+    float ph = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      breathe(i);
+      float t = (float)i / SR;
+      ph += (90 + 110 * expf(-t * 30)) / SR;
+      w[i] = tanhf(sinf(ph * PI2) * 3) * expf(-t * 16) + sinf(t * PI2 * 880) * expf(-t * 25) * 0.35f + noise() * expf(-t * 400) * 0.5f;
+    }
+  }
+  set(Sfx::Bumper, 0.26f);
+  // スリングショット: パシッ
+  w = newWave(0.12f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    float t = (float)i / SR;
+    w[i] = noise() * expf(-t * 120) * 0.8f + sinf(t * PI2 * 420) * expf(-t * 50) * 0.6f;
+  }
+  set(Sfx::Sling, 0.2f);
+  // レーン: ピン (鈴)
+  w = newWave(0.35f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    w[i] = (sinf(t * PI2 * 1760) + sinf(t * PI2 * 2640) * 0.4f + sinf(t * PI2 * 4400) * 0.15f) * expf(-t * 12) * min(1.0f, t / 0.002f);
+  }
+  set(Sfx::Rollover, 0.14f);
+  // ターゲット: コトッ
+  w = newWave(0.12f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    float t = (float)i / SR;
+    w[i] = sinf(t * PI2 * 320) * expf(-t * 55) + sinf(t * PI2 * 1150) * expf(-t * 90) * 0.4f + noise() * expf(-t * 600) * 0.5f;
+  }
+  set(Sfx::DropT, 0.26f);
+  // ブラックホール: ズゥン (沈んでいく音と、こもった雑音)
+  w = newWave(0.8f);
+  {
+    float ph = 0, lp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      breathe(i);
+      float t = (float)i / SR, k = t / 0.8f;
+      ph += (380 * powf(0.15f, k) + 50) / SR;
+      lp += (noise() - lp) * 0.05f;
+      w[i] = (tanhf(sinf(ph * PI2) * 2) * 0.8f + lp * 2) * min(1.0f, t / 0.01f) * powf(1 - k, 1.5f);
+    }
+  }
+  set(Sfx::Saucer, 0.26f);
+  // 打ち出す: バネのシュッとビョン
+  w = newWave(0.3f);
+  {
+    float lp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      breathe(i);
+      float t = (float)i / SR;
+      lp += (noise() - lp) * 0.25f;
+      w[i] = lp * 1.6f * expf(-t * 30) + sinf(t * PI2 * (160 + 40 * sinf(t * PI2 * 30))) * expf(-t * 14) * 0.5f;
+    }
+  }
+  set(Sfx::Launch, 0.24f);
+  // ボールが落ちた: 高いところから下がる音
+  w = newWave(0.8f);
+  {
+    float ph = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      breathe(i);
+      float t = (float)i / SR, k = t / 0.8f;
+      ph += 880 * powf(0.125f, k) / SR;
+      float fr = ph - floorf(ph);
+      w[i] = ((fr < 0.5f ? 1.0f : -1.0f) * 0.3f + (1 - 4 * fabsf(fr - 0.5f)) * 0.7f) * (1 - k) * min(1.0f, t / 0.01f);
+    }
+  }
+  set(Sfx::Drain, 0.2f);
+  // TILT: ブー
+  w = newWave(0.7f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    w[i] = (square(t * 110) * 0.6f + square(t * 113) * 0.4f) * min(1.0f, t / 0.01f) * (t < 0.6f ? 1 : (0.7f - t) * 10);
+  }
+  set(Sfx::Tilt, 0.16f);
+  melody({3, 7, 10, 15, 19, 22, 27}, {0.06f, 0.06f, 0.06f, 0.06f, 0.06f, 0.06f, 0.35f}, 0.25f);
+  set(Sfx::Jackpot, 0.24f);
+  melody({-2, 3, 7, 10, 7, 15}, {0.1f, 0.1f, 0.1f, 0.15f, 0.1f, 0.45f}, 0.3f);
+  set(Sfx::PinStart, 0.24f);
+
+  // ---- 6 本目 (JUKEBOX) ----
+  // チャイム: 古い台の、金属の棒を打つ音 (基音と、ずれた倍音)
+  {
+    const float CF[3] = {1046.5f, 784.0f, 523.3f};
+    const Sfx CS[3] = {Sfx::Chime10, Sfx::Chime100, Sfx::Chime1000};
+    for (int k = 0; k < 3; k++)
+    {
+      w = newWave(0.9f);
+      for (int i = 0; i < tmpN; i++)
+      {
+        breathe(i);
+        float t = (float)i / SR, f = CF[k];
+        w[i] = (sinf(t * PI2 * f) * expf(-t * 4) + sinf(t * PI2 * f * 2.76f) * 0.35f * expf(-t * 9) + sinf(t * PI2 * f * 5.4f) * 0.15f * expf(-t * 18) +
+                noise() * expf(-t * 900) * 0.3f) *
+               min(1.0f, t / 0.001f);
+      }
+      set(CS[k], 0.13f);
+    }
+  }
+  // ノッカー: ゴン (箱に響く低い音)
+  w = newWave(0.35f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    w[i] = tanhf(sinf(t * PI2 * (75 + 60 * expf(-t * 40))) * 4) * expf(-t * 14) + noise() * expf(-t * 250) * 0.8f +
+           sinf(t * PI2 * 310) * expf(-t * 30) * 0.3f;
+  }
+  set(Sfx::Knocker, 0.4f);
+  // キックアウト: ガコン
+  w = newWave(0.3f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    w[i] = tanhf(sinf(t * PI2 * 120) * 3) * expf(-t * 25) + sinf(t * PI2 * 1350) * expf(-t * 35) * 0.35f + noise() * expf(-t * 300) * 0.6f;
+  }
+  set(Sfx::Kickout, 0.26f);
+
+  // ---- 7 本目 (SMARTBALL) ----
+  // 釘: 小さな金属のチッ
+  w = newWave(0.05f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    float t = (float)i / SR;
+    w[i] = sinf(t * PI2 * 3900) * expf(-t * 140) + sinf(t * PI2 * 6100) * 0.5f * expf(-t * 200) + noise() * expf(-t * 1200) * 0.4f;
+  }
+  set(Sfx::Nail, 0.07f);
+  // 穴に入る: コトン (木の箱に落ちる) と、小さなカラカラ
+  w = newWave(0.4f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    breathe(i);
+    float t = (float)i / SR;
+    float v = sinf(t * PI2 * 380) * expf(-t * 30) + sinf(t * PI2 * 900) * expf(-t * 60) * 0.4f + noise() * expf(-t * 400) * 0.5f;
+    float u = t - 0.09f;
+    if (u > 0)
+      v += (sinf(u * PI2 * 520) * expf(-u * 45) + noise() * expf(-u * 500) * 0.3f) * 0.5f;
+    w[i] = v;
+  }
+  set(Sfx::HoleIn, 0.24f);
+  // 払い出し: 玉がたくさん流れ出るジャラジャラ
+  w = newWave(0.9f);
+  for (int k = 0; k < 40; k++)
+  {
+    vTaskDelay(1);
+    float st = rnd01() * 0.7f;
+    int s0 = (int)(SR * st);
+    float f = 1700 + rnd01() * 1600, a = (0.25f + rnd01() * 0.35f) * (1 - st / 0.9f);
+    for (int i = 0; s0 + i < tmpN && i < SR * 0.04f; i++)
+    {
+      float u = (float)i / SR;
+      w[s0 + i] += (sinf(u * PI2 * f) * expf(-u * 130) + noise() * expf(-u * 700) * 0.4f) * a;
+    }
+  }
+  set(Sfx::Payout, 0.2f);
+  // 玉が転がってくる: こもったゴロゴロ
+  w = newWave(0.45f);
+  {
+    float lp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      breathe(i);
+      float t = (float)i / SR;
+      lp += (noise() - lp) * 0.06f;
+      w[i] = lp * 3 * (0.6f + 0.4f * sinf(t * PI2 * 28)) * sinf(min(1.0f, t / 0.45f) * 3.1416f);
+    }
+  }
+  set(Sfx::Feed, 0.16f);
   free(tmp);
   tmp = nullptr;
 }
@@ -1051,7 +1247,7 @@ void loopSounds(float *mix, bool mute)
 // 作るのに 50 秒ほどかかるので、一度作ったら /sfx.bin に保存し、次からは読むだけにする (1.4MB ほど)。
 // 見出しに版の番号 (CACHE_KEY) を入れておき、音の作り方を変えて番号を上げたら作りなおす
 const char *const CACHE = "/sfx.bin";
-const char CACHE_KEY[40] = "SKYLARK-SFX v5"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
+const char CACHE_KEY[40] = "SKYLARK-SFX v8"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
 
 bool loadCache()
 {

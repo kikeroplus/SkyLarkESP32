@@ -11,6 +11,9 @@
 #include "game2.h"
 #include "game3.h"
 #include "game4.h"
+#include "game5.h"
+#include "game6.h"
+#include "game7.h"
 #include <algorithm>
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(TFT_DC, TFT_CS, TFT_SCK, TFT_MOSI, TFT_MISO);
@@ -20,11 +23,15 @@ Game *game = nullptr;
 Game2 *game2 = nullptr; // 2 本目を選んだときだけ作る
 Game3 *game3 = nullptr; // 3 本目を選んだときだけ作る
 Game4 *game4 = nullptr; // 4 本目を選んだときだけ作る
+Game5 *game5 = nullptr; // 5 本目を選んだときだけ作る
+Game6 *game6 = nullptr; // 6 本目を選んだときだけ作る
+Game7 *game7 = nullptr; // 7 本目を選んだときだけ作る
 Sound snd;
 Preferences prefs;
 
 // ---- ジョイスティック (試験で確かめた読み方。joytest と同じ) ----
-const float DEAD_ZONE = 0.12f; // これより小さい傾きは 0 (中央のぶれを消す)
+const float JUMP = 0.085f;     // 軸ごとに、中央から跳ぶ分 (Axis::read で差し引く)
+const float DEAD_ZONE = 0.04f; // 跳ぶ分を差し引いたあとの倒れ (縦横あわせた長さ) がこれより小さいと 0 (中央のぶれを消す)
 const float DIR_ON = 0.35f;    // これより倒すと、その向きのキーを押したことにする
 const int ADC_MAX = 4095;
 
@@ -33,7 +40,9 @@ struct Axis
   int pin;
   bool invert;
   int center = ADC_MAX / 2;
-  float v = 0; // -1〜1 (右・上が正。不感帯を除いたもの)
+  int last = 0; // 最後に読んだ ADC の値 (確かめる用)
+  float n = 0; // -1〜1 (右・上が正。中央からの傾きそのまま。少しならして揺れを消す)
+  float v = 0; // -1〜1 (不感帯を除いたもの。readStick() で縦横いっしょに決める)
 
   Axis(int p, bool inv) : pin(p), invert(inv) {}
   void calibrate()
@@ -49,15 +58,38 @@ struct Axis
     for (int i = 0; i < 4; i++)
       sum += analogRead(pin);
     int raw = sum / 4;
-    float n = raw >= center ? (float)(raw - center) / max(1, ADC_MAX - center) : (float)(raw - center) / max(1, center);
+    last = raw;
+    float m = raw >= center ? (float)(raw - center) / max(1, ADC_MAX - center) : (float)(raw - center) / max(1, center);
     if (invert)
-      n = -n;
-    float a = fabsf(n);
-    v = a < DEAD_ZONE ? 0 : copysignf(min(1.0f, (a - DEAD_ZONE) / (1 - DEAD_ZONE)), n);
+      m = -m;
+    // このスティックは中央の近くに値の変わらない幅があり、そこを越えると約 0.09 へ急に跳ぶ
+    // (2026-11-12 に実機で測った)。跳ぶ分を差し引いて 0 からつながるようにする。
+    // 差し引かないと、小さいほうの軸が 0 か 0.09 しか取れず、十字の向きに吸いつく
+    float am = fabsf(m);
+    m = am <= JUMP ? 0 : copysignf((am - JUMP) / (1 - JUMP), m);
+    n += (m - n) * 0.6f; // 軽くならす (遅れは 1 回分ほど)
   }
 };
 // 上を正にそろえる: ふつうのモジュールは上に倒すと VRY が減るので、反転の指定を逆にして渡す
 Axis ax{JOY_X_PIN, JOY_X_INVERT}, ay{JOY_Y_PIN, !JOY_Y_INVERT};
+
+// 不感帯を軸ごとでなく円で取る。軸ごとだと、少し斜めに倒しても小さいほうの軸が 0 に切られて
+// 十字の向きに吸いつき、いびつに動く。円で取れば向きはそのまま、長さだけを詰める。
+// 長さは 1 で止める (四角く動くスティックで斜めだけ速くならないように)
+void readStick()
+{
+  ax.read();
+  ay.read();
+  float r = sqrtf(ax.n * ax.n + ay.n * ay.n);
+  if (r < DEAD_ZONE)
+  {
+    ax.v = ay.v = 0;
+    return;
+  }
+  float k = min(1.0f, (r - DEAD_ZONE) / (1 - DEAD_ZONE)) / r;
+  ax.v = ax.n * k;
+  ay.v = ay.n * k;
+}
 
 // 押した瞬間を、次にゲームを進めるときまで覚えておく (短く押しても取りこぼさない)
 struct Key
@@ -122,8 +154,7 @@ float stickY() { return JOY_SWAP_XY ? ax.v : ay.v; }
 
 void pollInput()
 {
-  ax.read();
-  ay.read();
+  readStick();
   kSw1.set(digitalRead(SW1_PIN) == LOW);
   kSw2.set(digitalRead(SW2_PIN) == LOW);
   kSw3Hold.set(digitalRead(SW3_PIN) == LOW);
@@ -307,6 +338,141 @@ void loadPrefs4()
   }
 }
 
+// 5 本目のランキング (点数) と名前は、名前空間 orbit に残す
+Preferences prefs5;
+void saveTable5()
+{
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    prefs5.putInt(k, game5->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    prefs5.putString(k, game5->Table[i].Name);
+  }
+  prefs5.putString("name", game5->LastName);
+}
+
+void loadPrefs5()
+{
+  prefs5.begin("orbit", false);
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    if (!prefs5.isKey(k))
+      continue;
+    game5->Table[i].Score = prefs5.getInt(k, game5->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    String n = prefs5.getString(k, game5->Table[i].Name);
+    strncpy(game5->Table[i].Name, n.c_str(), 3);
+    game5->Table[i].Name[3] = 0;
+  }
+  if (prefs5.isKey("name"))
+  {
+    String n = prefs5.getString("name", "AAA");
+    strncpy(game5->LastName, n.c_str(), 3);
+    game5->LastName[3] = 0;
+  }
+}
+
+// 6 本目のランキング (点数) と名前は、名前空間 jukebox に残す
+Preferences prefs6;
+void saveTable6()
+{
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    prefs6.putInt(k, game6->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    prefs6.putString(k, game6->Table[i].Name);
+  }
+  prefs6.putString("name", game6->LastName);
+}
+
+void loadPrefs6()
+{
+  prefs6.begin("jukebox", false);
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    if (!prefs6.isKey(k))
+      continue;
+    game6->Table[i].Score = prefs6.getInt(k, game6->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    String n = prefs6.getString(k, game6->Table[i].Name);
+    strncpy(game6->Table[i].Name, n.c_str(), 3);
+    game6->Table[i].Name[3] = 0;
+  }
+  if (prefs6.isKey("name"))
+  {
+    String n = prefs6.getString("name", "AAA");
+    strncpy(game6->LastName, n.c_str(), 3);
+    game6->LastName[3] = 0;
+  }
+}
+
+// 7 本目のランキング (払い出しの合計) と名前は、名前空間 smartball に残す
+Preferences prefs7;
+void saveTable7()
+{
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    prefs7.putInt(k, game7->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    prefs7.putString(k, game7->Table[i].Name);
+  }
+  prefs7.putString("name", game7->LastName);
+}
+
+void loadPrefs7()
+{
+  prefs7.begin("smartball", false);
+  char k[4];
+  for (int i = 0; i < 5; i++)
+  {
+    snprintf(k, sizeof(k), "s%d", i);
+    if (!prefs7.isKey(k))
+      continue;
+    game7->Table[i].Score = prefs7.getInt(k, game7->Table[i].Score);
+    snprintf(k, sizeof(k), "n%d", i);
+    String n = prefs7.getString(k, game7->Table[i].Name);
+    strncpy(game7->Table[i].Name, n.c_str(), 3);
+    game7->Table[i].Name[3] = 0;
+  }
+  if (prefs7.isKey("name"))
+  {
+    String n = prefs7.getString("name", "AAA");
+    strncpy(game7->LastName, n.c_str(), 3);
+    game7->LastName[3] = 0;
+  }
+}
+
+void applyVolume7() // 7 本目
+{
+  static const float MASTER[5] = {0, 0.12f, 0.25f, 0.5f, 1.0f};
+  snd.Muted = game7->VolumeLevel == 0;
+  snd.Master = MASTER[game7->VolumeLevel];
+}
+
+void applyVolume6() // 6 本目
+{
+  static const float MASTER[5] = {0, 0.12f, 0.25f, 0.5f, 1.0f};
+  snd.Muted = game6->VolumeLevel == 0;
+  snd.Master = MASTER[game6->VolumeLevel];
+}
+
+void applyVolume5() // 5 本目
+{
+  static const float MASTER[5] = {0, 0.12f, 0.25f, 0.5f, 1.0f};
+  snd.Muted = game5->VolumeLevel == 0;
+  snd.Master = MASTER[game5->VolumeLevel];
+}
+
 void applyVolume4() // 4 本目
 {
   static const float MASTER[5] = {0, 0.12f, 0.25f, 0.5f, 1.0f};
@@ -347,7 +513,13 @@ void drawFrame()
   for (int s = 0; s < STRIPS; s++)
   {
     gfx.startStrip(s);
-    if (game4)
+    if (game7)
+      game7->Draw(gfx);
+    else if (game6)
+      game6->Draw(gfx);
+    else if (game5)
+      game5->Draw(gfx);
+    else if (game4)
       game4->Draw(gfx);
     else if (game3)
       game3->Draw(gfx);
@@ -371,6 +543,7 @@ void drawFrame()
 }
 
 // 確かめる用のコマンド: s = 画面を送る、f = 10 秒先へ進める、n = SW1 を押したことにする、m = 母船の直前へ、z = (2 本目) 次の区画へ、a = (2 本目) 自動で遊ぶ
+bool joyLog = false; // 確かめる用: 1 フレームごとにスティックの値を出す ('j' で切り替え)
 void serialCommands()
 {
   while (Serial.available())
@@ -378,8 +551,22 @@ void serialCommands()
     int c = Serial.read();
     if (c == 's')
       snapshot = true;
+    else if (c == 'j')
+      joyLog = !joyLog;
     else if (c == 'n')
       kSw1.hit = true;
+    else if (c == 'z' && game7) // 7 本目: 持ち玉を 0 にする
+      game7->debugEnd();
+    else if (c == 'a' && game7) // 7 本目: 自動で遊ぶを切り替える
+      game7->autoPlay = !game7->autoPlay;
+    else if (c == 'z' && game6) // 6 本目: いまのボールを落とす
+      game6->debugDrain();
+    else if (c == 'a' && game6) // 6 本目: 自動で遊ぶを切り替える
+      game6->autoPlay = !game6->autoPlay;
+    else if (c == 'z' && game5) // 5 本目: いまのボールを落とす
+      game5->debugDrain();
+    else if (c == 'a' && game5) // 5 本目: 自動で遊ぶを切り替える
+      game5->autoPlay = !game5->autoPlay;
     else if (c == 'z' && game4) // 4 本目: 的玉を 1 個だけ残す
       game4->debugClear();
     else if (c == 'a' && game4) // 4 本目: 自動で打つを切り替える
@@ -409,12 +596,12 @@ void serialCommands()
   }
 }
 
-// ---- 起動の選択画面: SKYLARK か、2 本目 (FOUNDRY) か、3 本目 (LONGSHOT) か、4 本目 (CORNERS) か、ジョイスティック (PC の USB ゲームパッド) か ----
+// ---- 起動の選択画面: SKYLARK か、2 本目 (FOUNDRY) か、3 本目 (LONGSHOT) か、4 本目 (CORNERS) か、5 本目 (ORBIT) か、6 本目 (JUKEBOX) か、7 本目 (SMARTBALL) か、ジョイスティック (PC の USB ゲームパッド) か ----
 // 前回選んだものを選んでおき、触らなければ 3 秒で始める。スティックの上下 (SW2 でも) で選び、SW1 か押し込みで決める
-// 保存する番号は前からのまま (0 = SKYLARK、1 = ジョイスティック)。2 本目は 2、3 本目は 3、4 本目は 4。画面の並びは MENU_ORDER
-const int MODE_GAME = 0, MODE_PAD = 1, MODE_G2 = 2, MODE_G3 = 3, MODE_G4 = 4;
-const int MENU_N = 5;
-const int MENU_ORDER[MENU_N] = {MODE_GAME, MODE_G2, MODE_G3, MODE_G4, MODE_PAD};
+// 保存する番号は前からのまま (0 = SKYLARK、1 = ジョイスティック)。2 本目は 2、3 本目は 3、4 本目は 4、5 本目は 5、6 本目は 6、7 本目は 7。画面の並びは MENU_ORDER
+const int MODE_GAME = 0, MODE_PAD = 1, MODE_G2 = 2, MODE_G3 = 3, MODE_G4 = 4, MODE_G5 = 5, MODE_G6 = 6, MODE_G7 = 7;
+const int MENU_N = 8;
+const int MENU_ORDER[MENU_N] = {MODE_GAME, MODE_G2, MODE_G3, MODE_G4, MODE_G5, MODE_G6, MODE_G7, MODE_PAD};
 const int MENU_AUTO_MS = 3000;
 
 void drawMenu(int sel)
@@ -424,22 +611,22 @@ void drawMenu(int sel)
   panel->setTextColor(to565(0xF0C860));
   panel->setCursor(LW / 2 - 63, 40);
   panel->print("SKYLARK");
-  static const char *NAME[] = {"SKYLARK", "FOUNDRY", "LONGSHOT", "CORNERS", "JOYSTICK"};
-  static const char *SUB[] = {"PLAY SKYLARK", "HEXAPOD TANK", "SNIPER (WIP)", "POOL: CORNER POCKETS", "USB GAMEPAD FOR PC"};
+  static const char *NAME[] = {"SKYLARK", "FOUNDRY", "LONGSHOT", "CORNERS", "ORBIT", "JUKEBOX", "SMARTBALL", "JOYSTICK"};
+  static const char *SUB[] = {"PLAY SKYLARK", "HEXAPOD TANK", "SNIPER (WIP)", "POOL: CORNER POCKETS", "SPACE PINBALL", "RETRO DINER PINBALL", "OLD SHOP SMART BALL", "USB GAMEPAD FOR PC"};
   for (int i = 0; i < MENU_N; i++)
   {
-    int y = 74 + i * 42;
+    int y = 67 + i * 27;
     bool on = i == sel;
-    panel->fillRoundRect(24, y, LW - 48, 37, 8, to565(on ? 0xF0C860 : 0x0A111C));
+    panel->fillRoundRect(24, y, LW - 48, 25, 6, to565(on ? 0xF0C860 : 0x0A111C));
     if (!on)
-      panel->drawRoundRect(24, y, LW - 48, 37, 8, to565(0x1C3448));
+      panel->drawRoundRect(24, y, LW - 48, 25, 6, to565(0x1C3448));
     panel->setTextSize(2);
     panel->setTextColor(to565(on ? 0x04070C : 0xD8E6F0));
-    panel->setCursor(LW / 2 - (int)strlen(NAME[i]) * 6, y + 5);
+    panel->setCursor(LW / 2 - (int)strlen(NAME[i]) * 6, y + 1);
     panel->print(NAME[i]);
     panel->setTextSize(1);
     panel->setTextColor(to565(on ? 0x04070C : 0x5A7084));
-    panel->setCursor(LW / 2 - (int)strlen(SUB[i]) * 3, y + 25);
+    panel->setCursor(LW / 2 - (int)strlen(SUB[i]) * 3, y + 16);
     panel->print(SUB[i]);
   }
   panel->setTextSize(1);
@@ -475,8 +662,7 @@ int chooseMode()
   int shown = -1, shownLeft = -1;
   for (;;)
   {
-    ax.read();
-    ay.read();
+    readStick();
     bool sw1 = digitalRead(SW1_PIN) == LOW, sw2 = digitalRead(SW2_PIN) == LOW, stick = digitalRead(JOY_SW_PIN) == LOW;
     bool up = stickY() >= DIR_ON, down = stickY() <= -DIR_ON;
     if (!sw1 && !stick)
@@ -555,6 +741,84 @@ void setup()
   int mode = chooseMode();
   if (mode == MODE_PAD)
     runPadMode(panel); // 戻らない
+  if (mode == MODE_G7)
+  {
+    panel->setTextSize(3);
+    panel->setTextColor(to565(0xC8A860));
+    panel->setCursor(LW / 2 - 81, LH / 2 - 20);
+    panel->print("SMARTBALL");
+    panel->setTextSize(1);
+    panel->setTextColor(to565(0xE8DFC4));
+    panel->setCursor(LW / 2 - 30, LH / 2 + 16);
+    panel->print("LOADING...");
+    if (!gfx.begin())
+      Serial.println("gfx begin failed (memory)");
+    disableCore0WDT();
+    snd.begin();
+    game7 = new Game7();
+    game7->Snd = &snd;
+    game7->VolumeLevel = min(max((int)prefs.getInt("vol5", 2), 0), 4); // SKYLARK と同じ設定
+    applyVolume7();
+    uint32_t b0 = millis();
+    if (!game7->begin())
+      Serial.println("game7 begin failed (psram)");
+    loadPrefs7();
+    game7->TableChanged = saveTable7;
+    Serial.printf("game7 table built in %lu ms  heap %u  psram %u\n", millis() - b0, ESP.getFreeHeap(), ESP.getFreePsram());
+    return;
+  }
+  if (mode == MODE_G6)
+  {
+    panel->setTextSize(3);
+    panel->setTextColor(to565(0xE8323A));
+    panel->setCursor(LW / 2 - 63, LH / 2 - 20);
+    panel->print("JUKEBOX");
+    panel->setTextSize(1);
+    panel->setTextColor(to565(0xFFF4DC));
+    panel->setCursor(LW / 2 - 30, LH / 2 + 16);
+    panel->print("LOADING...");
+    if (!gfx.begin())
+      Serial.println("gfx begin failed (memory)");
+    disableCore0WDT();
+    snd.begin();
+    game6 = new Game6();
+    game6->Snd = &snd;
+    game6->VolumeLevel = min(max((int)prefs.getInt("vol5", 2), 0), 4); // SKYLARK と同じ設定
+    applyVolume6();
+    uint32_t b0 = millis();
+    if (!game6->begin())
+      Serial.println("game6 begin failed (psram)");
+    loadPrefs6();
+    game6->TableChanged = saveTable6;
+    Serial.printf("game6 table built in %lu ms  heap %u  psram %u\n", millis() - b0, ESP.getFreeHeap(), ESP.getFreePsram());
+    return;
+  }
+  if (mode == MODE_G5)
+  {
+    panel->setTextSize(3);
+    panel->setTextColor(to565(0x60E0F0));
+    panel->setCursor(LW / 2 - 45, LH / 2 - 20);
+    panel->print("ORBIT");
+    panel->setTextSize(1);
+    panel->setTextColor(to565(0xDCD8CF));
+    panel->setCursor(LW / 2 - 30, LH / 2 + 16);
+    panel->print("LOADING...");
+    if (!gfx.begin())
+      Serial.println("gfx begin failed (memory)");
+    disableCore0WDT();
+    snd.begin();
+    game5 = new Game5();
+    game5->Snd = &snd;
+    game5->VolumeLevel = min(max((int)prefs.getInt("vol5", 2), 0), 4); // SKYLARK と同じ設定
+    applyVolume5();
+    uint32_t b0 = millis();
+    if (!game5->begin())
+      Serial.println("game5 begin failed (psram)");
+    loadPrefs5();
+    game5->TableChanged = saveTable5;
+    Serial.printf("game5 table built in %lu ms  heap %u  psram %u\n", millis() - b0, ESP.getFreeHeap(), ESP.getFreePsram());
+    return;
+  }
   if (mode == MODE_G4)
   {
     panel->setTextSize(3);
@@ -757,6 +1021,8 @@ void loop4()
   {
     uint32_t t0 = micros();
     game4->Step(readInput());
+    if (joyLog)
+      Serial.printf("J %d %d %d %d %.3f %.3f\n", ax.last, ay.last, ax.center, ay.center, ax.n, ay.n);
     if (game4->WantMenu)
       ESP.restart();
     if (game4->VolumeChanged)
@@ -784,8 +1050,149 @@ void loop4()
   }
 }
 
+// 5 本目: 1 秒 30 回進めて描く。デモの画面で SW3 を長く押すと選択画面へ戻る (再起動)
+void loop5()
+{
+  static uint32_t next = millis();
+  static uint32_t lastLog = millis();
+  pollInput();
+  serialCommands();
+  uint32_t now = millis();
+  if ((int32_t)(now - next) < 0)
+    return;
+  int n = 0;
+  while ((int32_t)(now - next) >= 0 && n < 2)
+  {
+    uint32_t t0 = micros();
+    game5->Step(readInput());
+    if (game5->WantMenu)
+      ESP.restart();
+    if (game5->VolumeChanged)
+    {
+      game5->VolumeChanged = false;
+      applyVolume5();
+      prefs.putInt("vol5", game5->VolumeLevel);
+    }
+    stepUs += micros() - t0;
+    next += 1000 / Game5::FPS + ((next % 3) == 0 ? 1 : 0);
+    n++;
+  }
+  if ((int32_t)(now - next) >= 0)
+    next = now + 33;
+  drawFrame();
+  if (millis() - lastLog >= 5000 && frames > 0)
+  {
+    uint32_t f = frames;
+    Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f  (game draw %lu)\n", drawUs / f, drawMax, gfx.usPush / f,
+                  stepUs / f, f * 1000.0f / (millis() - lastLog), game5->profDraw / f);
+    game5->profDraw = 0;
+    drawUs = drawMax = stepUs = frames = 0;
+    gfx.usPush = 0;
+    lastLog = millis();
+  }
+}
+
+// 6 本目: 1 秒 30 回進めて描く。デモの画面で SW3 を長く押すと選択画面へ戻る (再起動)
+void loop6()
+{
+  static uint32_t next = millis();
+  static uint32_t lastLog = millis();
+  pollInput();
+  serialCommands();
+  uint32_t now = millis();
+  if ((int32_t)(now - next) < 0)
+    return;
+  int n = 0;
+  while ((int32_t)(now - next) >= 0 && n < 2)
+  {
+    uint32_t t0 = micros();
+    game6->Step(readInput());
+    if (game6->WantMenu)
+      ESP.restart();
+    if (game6->VolumeChanged)
+    {
+      game6->VolumeChanged = false;
+      applyVolume6();
+      prefs.putInt("vol5", game6->VolumeLevel);
+    }
+    stepUs += micros() - t0;
+    next += 1000 / Game6::FPS + ((next % 3) == 0 ? 1 : 0);
+    n++;
+  }
+  if ((int32_t)(now - next) >= 0)
+    next = now + 33;
+  drawFrame();
+  if (millis() - lastLog >= 5000 && frames > 0)
+  {
+    uint32_t f = frames;
+    Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f  (game draw %lu)\n", drawUs / f, drawMax, gfx.usPush / f,
+                  stepUs / f, f * 1000.0f / (millis() - lastLog), game6->profDraw / f);
+    game6->profDraw = 0;
+    drawUs = drawMax = stepUs = frames = 0;
+    gfx.usPush = 0;
+    lastLog = millis();
+  }
+}
+
+// 7 本目: 1 秒 30 回進めて描く。デモの画面で SW3 を長く押すと選択画面へ戻る (再起動)
+void loop7()
+{
+  static uint32_t next = millis();
+  static uint32_t lastLog = millis();
+  pollInput();
+  serialCommands();
+  uint32_t now = millis();
+  if ((int32_t)(now - next) < 0)
+    return;
+  int n = 0;
+  while ((int32_t)(now - next) >= 0 && n < 2)
+  {
+    uint32_t t0 = micros();
+    game7->Step(readInput());
+    if (game7->WantMenu)
+      ESP.restart();
+    if (game7->VolumeChanged)
+    {
+      game7->VolumeChanged = false;
+      applyVolume7();
+      prefs.putInt("vol5", game7->VolumeLevel);
+    }
+    stepUs += micros() - t0;
+    next += 1000 / Game7::FPS + ((next % 3) == 0 ? 1 : 0);
+    n++;
+  }
+  if ((int32_t)(now - next) >= 0)
+    next = now + 33;
+  drawFrame();
+  if (millis() - lastLog >= 5000 && frames > 0)
+  {
+    uint32_t f = frames;
+    Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f  (game draw %lu)  shots %d win %d\n", drawUs / f, drawMax,
+                  gfx.usPush / f, stepUs / f, f * 1000.0f / (millis() - lastLog), game7->profDraw / f, game7->statShots, game7->statWin);
+    game7->profDraw = 0;
+    drawUs = drawMax = stepUs = frames = 0;
+    gfx.usPush = 0;
+    lastLog = millis();
+  }
+}
+
 void loop()
 {
+  if (game7)
+  {
+    loop7();
+    return;
+  }
+  if (game6)
+  {
+    loop6();
+    return;
+  }
+  if (game5)
+  {
+    loop5();
+    return;
+  }
   if (game4)
   {
     loop4();

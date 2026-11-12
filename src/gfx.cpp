@@ -706,6 +706,9 @@ static int lowSize(int size) { return max(1, (size * 2 + 1) / 3); }
 
 int Gfx::textWidth(const char *s, int size) { return strlen(s) * 6 * lowSize(size) * 3 / 2; }
 
+// 6x8 の文字の形 (5 列、列の下位ビットが上)。台の絵に文字を焼きこむときに使う
+const uint8_t *fontGlyph(int ch) { return (ch < 32 || ch > 127) ? nullptr : FONT + (ch - 32) * 5; }
+
 void Gfx::glyph(int lx, int ly, int ch, int size, uint16_t col)
 {
   if (ch < 32 || ch > 127)

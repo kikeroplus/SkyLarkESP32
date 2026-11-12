@@ -22,7 +22,8 @@ const uint32_t C_BG = 0x04070C, C_PANEL = 0x0A111C, C_LINE = 0x1C3448,
                C_DIM = 0x5A7084, C_TEXT = 0xD8E6F0, C_CYAN = 0x00D0FF,
                C_GREEN = 0x30E080, C_YELLOW = 0xF0C020, C_RED = 0xFF4050;
 
-const float DEAD_ZONE = 0.08f; // これより小さい傾きは 0 (中央のぶれを消す)
+const float JUMP = 0.085f;     // 軸ごとに、中央から跳ぶ分 (Axis::read で差し引く)
+const float DEAD_ZONE = 0.03f; // 跳ぶ分を差し引いたあとの倒れ (縦横あわせた長さ) がこれより小さいと 0 (中央のぶれを消す)
 const int ADC_MAX = 4095;
 
 struct Axis
@@ -30,7 +31,8 @@ struct Axis
   int pin;
   bool invert;
   int center = ADC_MAX / 2;
-  float v = 0; // -1〜1 (右・上が正。不感帯を除いたもの)
+  float n = 0; // -1〜1 (右・上が正。中央からの傾きそのまま。少しならして揺れを消す)
+  float v = 0; // -1〜1 (不感帯を除いたもの。readStick() で縦横いっしょに決める)
 
   Axis(int p, bool inv) : pin(p), invert(inv) {}
   void calibrate()
@@ -46,15 +48,37 @@ struct Axis
     for (int i = 0; i < 4; i++)
       sum += analogRead(pin);
     int raw = sum / 4;
-    float n = raw >= center ? (float)(raw - center) / max(1, ADC_MAX - center) : (float)(raw - center) / max(1, center);
+    float m = raw >= center ? (float)(raw - center) / max(1, ADC_MAX - center) : (float)(raw - center) / max(1, center);
     if (invert)
-      n = -n;
-    float a = fabsf(n);
-    v = a < DEAD_ZONE ? 0 : copysignf(min(1.0f, (a - DEAD_ZONE) / (1 - DEAD_ZONE)), n);
+      m = -m;
+    // このスティックは中央の近くに値の変わらない幅があり、そこを越えると約 0.09 へ急に跳ぶ
+    // (2026-11-12 に実機で測った)。跳ぶ分を差し引いて 0 からつながるようにする。
+    // 差し引かないと、小さいほうの軸が 0 か 0.09 しか取れず、十字の向きに吸いつく
+    float am = fabsf(m);
+    m = am <= JUMP ? 0 : copysignf((am - JUMP) / (1 - JUMP), m);
+    n += (m - n) * 0.6f; // 軽くならす (遅れは 1 回分ほど)
   }
 };
 // 上を正にそろえる: ふつうのモジュールは上に倒すと VRY が減るので、反転の指定を逆にして渡す
 Axis ax{JOY_X_PIN, JOY_X_INVERT}, ay{JOY_Y_PIN, !JOY_Y_INVERT};
+
+// 不感帯を軸ごとでなく円で取る。軸ごとだと、少し斜めに倒しても小さいほうの軸が 0 に切られて
+// 十字の向きに吸いつき、いびつに動く。円で取れば向きはそのまま、長さだけを詰める。
+// 長さは 1 で止める (四角く動くスティックで斜めだけ速くならないように)
+void readStick()
+{
+  ax.read();
+  ay.read();
+  float r = sqrtf(ax.n * ax.n + ay.n * ay.n);
+  if (r < DEAD_ZONE)
+  {
+    ax.v = ay.v = 0;
+    return;
+  }
+  float k = min(1.0f, (r - DEAD_ZONE) / (1 - DEAD_ZONE)) / r;
+  ax.v = ax.n * k;
+  ay.v = ay.n * k;
+}
 float stickX() { return JOY_SWAP_XY ? ay.v : ax.v; }
 float stickY() { return JOY_SWAP_XY ? ax.v : ay.v; }
 
@@ -103,8 +127,7 @@ bool held(bool down, uint32_t &since)
 
 void poll()
 {
-  ax.read();
-  ay.read();
+  readStick();
   uint32_t bits = 0;
   for (int i = 0; i < BUTTON_COUNT; i++)
   {

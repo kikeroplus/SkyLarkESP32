@@ -16,6 +16,8 @@ const int STRIP = 96;           // 帯 1 本の高さ (描く座標)。液晶で
 const int LSTRIP = STRIP * 2 / 3;
 const int STRIPS = SH / STRIP;
 
+const uint8_t *fontGlyph(int ch); // 6x8 の文字の形 (5 列。無い文字は nullptr)
+
 namespace Datum
 {
 const int TL = 0; // 左上
