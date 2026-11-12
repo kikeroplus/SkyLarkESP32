@@ -44,14 +44,23 @@ private:
   struct Ball
   {
     float x, y, vx, vy;
-    uint8_t st; // 0 = 無い、1 = 転がっている、2 = 穴に落ちている
+    uint8_t st; // 0 = 無い、1 = 転がっている、2 = 穴に落ちている、3 = 10 の穴の妖怪がくわえている (このあと吐き出す)
     uint8_t hole;
     int t;    // 落ちている時間 / 止まっている時間
+    float rub; // 返しゴムに当たったとき、ゴムを立てる向きへ傾ける角度 (玉ごとにでたらめ)
+    uint8_t nocap; // 吐き出された直後は、この回数のあいだ穴に入らない
   };
   struct Pop // 払い出しの数が浮かぶ
   {
     float x, y;
     int v, t;
+  };
+
+  struct Yokai // 台に出てくる小さな妖怪。玉が当たるとはじく
+  {
+    float x, y, k; // k: 0 = 隠れている、1 = 出ている
+    int st, t, hitT;
+    float ph;
   };
 
   Mode mode = Mode::Attract;
@@ -78,6 +87,9 @@ private:
   int aiT = 0, aiNudgeT = 0;
   float aiP = 0.7f;
 
+  int spitT = -1, spitBall = 0; // 10 の穴の妖怪: 顔を出してから数えたフレーム (-1 = 出ていない) と、くわえている玉
+  Yokai yk[3]; // 0 = 上の提灯おばけ、1 = 左のから傘おばけ、2 = 右の一つ目小僧
+
   uint16_t *bg = nullptr;
 
   float rnd();
@@ -90,7 +102,9 @@ private:
   void stepPlunger(float pull);
   void nudge(int dir);
   void physics();
-  void collideSeg(Ball &o, float x0, float y0, float x1, float y1, float e, bool gate);
+  void stepYokai();
+  void resetYokai();
+  void collideSeg(Ball &o, float x0, float y0, float x1, float y1, float e, bool gate, float rot = 0);
   int rankOf(int s) const;
   void stepEntry(const Input &in);
   void finishEntry();

@@ -96,6 +96,7 @@ enum class Sfx
   HoleIn,  // 穴に入る: コトン
   Payout,  // 払い出し: ジャラジャラ
   Feed,    // 玉が打ち出す所へ転がってくる: ゴロゴロ
+  Yokai,   // 妖怪に玉が当たる: ぽよん
   Count
 };
 

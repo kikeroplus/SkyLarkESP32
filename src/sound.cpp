@@ -1080,6 +1080,19 @@ void makeWaves()
     }
   }
   set(Sfx::Feed, 0.16f);
+  // 妖怪に当たる: 音程が下がるぽよん (少しふるえる)
+  w = newWave(0.25f);
+  {
+    float ph = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      float t = (float)i / SR;
+      float f = (260 + 640 * expf(-t * 9)) * (1 + 0.04f * sinf(t * PI2 * 24));
+      ph += PI2 * f / SR;
+      w[i] = (sinf(ph) + 0.25f * sinf(ph * 2)) * expf(-t * 12) * min(1.0f, t * 400);
+    }
+  }
+  set(Sfx::Yokai, 0.2f);
   free(tmp);
   tmp = nullptr;
 }
@@ -1247,7 +1260,7 @@ void loopSounds(float *mix, bool mute)
 // 作るのに 50 秒ほどかかるので、一度作ったら /sfx.bin に保存し、次からは読むだけにする (1.4MB ほど)。
 // 見出しに版の番号 (CACHE_KEY) を入れておき、音の作り方を変えて番号を上げたら作りなおす
 const char *const CACHE = "/sfx.bin";
-const char CACHE_KEY[40] = "SKYLARK-SFX v8"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
+const char CACHE_KEY[40] = "SKYLARK-SFX v9"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
 
 bool loadCache()
 {
