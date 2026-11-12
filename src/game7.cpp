@@ -25,6 +25,10 @@ static const float LANE_X = 224;
 static const float TRAY_Y = 304; // ここから下は樋 (入らなかった玉が落ちる)
 static const float OUT_Y = 318;
 static const float E_NAIL = 0.45f;
+// 左上の返しゴム (水平から 60 度ほど立てる): 強く打って上の丸い壁を回ってきた玉を、台の中へはね返す。両端は丸い壁にほぼ付けて、裏へ玉が入らないようにする
+static const float RUB_X0 = 9.2f, RUB_Y0 = 81, RUB_X1 = 31.6f, RUB_Y1 = 42.6f, E_RUB = 0.8f;
+// 左右の壁ぎわの釘: 壁に沿ってすんなり落ちる玉を、台の中へ寄せる。壁とのすき間は玉より狭いので、玉は内側へそれる
+static const float SIDE_Y = 138, SIDE_LX = 11, SIDE_RX = 211;
 
 // 穴と払い出しの数
 struct Hole
@@ -102,6 +106,7 @@ static void buildWalls()
   addW(XO, ARC_Y, XO, 330, 0.3f);
   addW(XD, GATE_Y0, XD, 330, 0.3f);
   addW(XD, GATE_Y0, XO, GATE_Y1, 0.3f, true);
+  addW(RUB_X0, RUB_Y0, RUB_X1, RUB_Y1, E_RUB); // 返しゴム (いちばん最後に足す)
 }
 
 static void addNail(float x, float y)
@@ -136,6 +141,8 @@ static void buildNails()
   addNail(103, 176);
   addNail(119, 176);
   addNail(111, 161); // 真上から落ちてきた玉は、これではじく
+  addNail(SIDE_LX, SIDE_Y);
+  addNail(SIDE_RX, SIDE_Y);
   // ほかの釘: 互いちがいの並び。穴のまわりと壁ぎわはあける
   for (int row = 0;; row++)
   {
@@ -151,6 +158,8 @@ static void buildNails()
       for (int i = 0; i < nW && ok; i++) // 壁とのすき間が玉より狭いと、玉がはさまって止まる
         if (segDist(x, y, walls[i].x0, walls[i].y0, walls[i].x1, walls[i].y1) < 17)
           ok = false;
+      if (ok && (hypotf(x - SIDE_LX, y - SIDE_Y) < 17 || hypotf(x - SIDE_RX, y - SIDE_Y) < 17))
+        ok = false;
       if (ok && hypotf(x - 111, y - 177) < 14)
         ok = false;
       if (ok)
@@ -334,12 +343,27 @@ void Game7::buildTable()
         d2::P(x, y, c, d > 7 ? 140 : 255);
       }
   }
-  // 壁: くすんだ鉄の手すりに、さび
-  for (int i = 0; i < nW; i++)
+  // 壁: くすんだ鉄の手すりに、さび (いちばん最後の返しゴムは別に描く)
+  const int nIron = nW - 1;
+  for (int i = 0; i < nIron; i++)
     d2::LT(walls[i].x0, walls[i].y0, walls[i].x1, walls[i].y1, 3, 0x7A7468);
-  for (int i = 0; i < nW; i++)
+  for (int i = 0; i < nIron; i++)
     d2::L(walls[i].x0, walls[i].y0, walls[i].x1, walls[i].y1, 0xA8A294);
-  for (int i = 0; i < nW; i++)
+  // 返しゴム: 2 本の真鍮の柱に張った、古くなって白っぽい黒ゴム
+  d2::LT(RUB_X0 + 1.5f, RUB_Y0 + 2, RUB_X1 + 1.5f, RUB_Y1 + 2, 5, 0x000000, 90);
+  d2::LT(RUB_X0, RUB_Y0, RUB_X1, RUB_Y1, 5, 0x2A2420);
+  d2::L(RUB_X0 + 1, RUB_Y0 + 1, RUB_X1 + 1, RUB_Y1 + 1, 0x5A5048);
+  for (float u = 0.1f; u < 0.9f; u += 0.05f)
+    if (d2::h2(u * 97, 3) > 0.7f) // ひび割れ
+      d2::P(RUB_X0 + (RUB_X1 - RUB_X0) * u, RUB_Y0 + (RUB_Y1 - RUB_Y0) * u, 0x7A7064);
+  for (int k = 0; k < 2; k++)
+  {
+    float px = k ? RUB_X1 : RUB_X0, py = k ? RUB_Y1 : RUB_Y0;
+    d2::C(px + 1, py + 1.5f, 3.5f, 0x000000, 100);
+    d2::C(px, py, 3.2f, 0x8A7038);
+    d2::C(px - 0.8f, py - 0.8f, 1.4f, 0xC8A860);
+  }
+  for (int i = 0; i < nIron; i++)
     for (float u = 0; u <= 1; u += 0.08f)
     {
       float x = walls[i].x0 + (walls[i].x1 - walls[i].x0) * u, y = walls[i].y0 + (walls[i].y1 - walls[i].y0) * u;
@@ -467,6 +491,8 @@ void Game7::collideSeg(Ball &o, float x0, float y0, float x1, float y1, float e,
   float vn = o.vx * nx + o.vy * ny;
   if (vn < 0)
   {
+    if (e >= E_RUB && vn < -120)
+      sfx(Sfx::Sling, std::min(1.0f, -vn / 500)); // 返しゴム: ボヨン
     o.vx -= (1 + e) * vn * nx;
     o.vy -= (1 + e) * vn * ny;
   }
@@ -621,7 +647,7 @@ void Game7::stepPlunger(float pull)
         Ball &o = b[i];
         if (o.st == 1 && o.x > XD && o.y > ply - BALL_R - 6 && fabsf(o.vy) < 80)
         {
-          o.vy = -(230 + 520 * p);
+          o.vy = -(230 + 520 * powf(p, 1.7f)); // 弱い側を細かく: 半分引いて 3 割ほどの強さ。いっぱいに引けば今までと同じ
           sfx(Sfx::Launch, 0.4f + 0.6f * p);
         }
       }
