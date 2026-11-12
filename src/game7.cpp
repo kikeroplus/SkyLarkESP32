@@ -670,7 +670,12 @@ void Game7::physics()
         if (y.hitT < 4)
         {
           y.hitT = 12;
-          sfx(Sfx::Yokai);
+          // 10 種類の声からでたらめに。続けて同じ声にはしない
+          int v = (int)(rnd() * 10) % 10;
+          if (v == lastYkSnd)
+            v = (v + 1 + (int)(rnd() * 9)) % 10;
+          lastYkSnd = v;
+          sfx((Sfx)((int)Sfx::Yokai0 + v));
         }
       }
     }
@@ -912,8 +917,7 @@ void Game7::stepBoard(const Input *in)
       o.st = 1;
       o.t = 0;
       o.nocap = HOP_N;
-      sfx(Sfx::Yokai);
-      sfx(Sfx::Launch, 0.5f);
+      sfx(Sfx::Spit);
     }
     if (spitT >= SPIT_END)
       spitT = -1;

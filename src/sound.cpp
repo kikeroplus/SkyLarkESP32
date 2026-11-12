@@ -1080,19 +1080,108 @@ void makeWaves()
     }
   }
   set(Sfx::Feed, 0.16f);
-  // 妖怪に当たる: 音程が下がるぽよん (少しふるえる)
-  w = newWave(0.25f);
+  // 妖怪に当たる: 10 種類。どれもおどけた短い声
   {
-    float ph = 0;
-    for (int i = 0; i < tmpN; i++)
+    static const float LEN[10] = {0.25f, 0.18f, 0.4f, 0.09f, 0.14f, 0.2f, 0.2f, 0.45f, 0.5f, 0.24f};
+    static const float VOL[10] = {0.2f, 0.16f, 0.2f, 0.12f, 0.2f, 0.18f, 0.13f, 0.17f, 0.12f, 0.22f};
+    for (int v = 0; v < 10; v++)
     {
-      float t = (float)i / SR;
-      float f = (260 + 640 * expf(-t * 9)) * (1 + 0.04f * sinf(t * PI2 * 24));
-      ph += PI2 * f / SR;
-      w[i] = (sinf(ph) + 0.25f * sinf(ph * 2)) * expf(-t * 12) * min(1.0f, t * 400);
+      w = newWave(LEN[v]);
+      float ph = 0, ph2 = 0, L = LEN[v];
+      for (int i = 0; i < tmpN; i++)
+      {
+        float t = (float)i / SR, f = 440, a = 0, x = 0;
+        float atk = min(1.0f, t * 400); // 出だしのぷつっを消す
+        switch (v)
+        {
+        case 0: // ぽよん: 音程が下がる、少しふるえる
+          f = (260 + 640 * expf(-t * 9)) * (1 + 0.04f * sinf(t * PI2 * 24));
+          ph += PI2 * f / SR;
+          x = (sinf(ph) + 0.25f * sinf(ph * 2)) * expf(-t * 12);
+          break;
+        case 1: // ひゅっ: すばやく上がる口笛
+          f = 500 + 1500 * t / L;
+          ph += PI2 * f / SR;
+          x = sinf(ph) * sinf(3.1416f * t / L) + noise() * 0.08f * sinf(3.1416f * t / L);
+          break;
+        case 2: // ぽよよん: ゆれながら下がる
+          f = (420 - 200 * t / L) * (1 + 0.22f * sinf(t * PI2 * 13));
+          ph += PI2 * f / SR;
+          x = sinf(ph) * expf(-t * 5);
+          break;
+        case 3: // きゅっ: 高いきしみ
+          f = 1700 + 900 * sinf(3.1416f * t / L);
+          ph += PI2 * f / SR;
+          x = tanhf(sinf(ph) * 3) * sinf(3.1416f * t / L) * 0.7f;
+          break;
+        case 4: // ぽん: 栓を抜いたような音
+          f = 180 + 520 * expf(-t * 25);
+          ph += PI2 * f / SR;
+          x = sinf(ph) * expf(-t * 28) + noise() * expf(-t * 600) * 0.5f;
+          break;
+        case 5: // げこっ: 蛙のような 2 回のがらがら声
+          ph += PI2 * 115 / SR;
+          a = (t < 0.07f ? sinf(3.1416f * t / 0.07f) : 0) + (t > 0.1f && t < 0.19f ? sinf(3.1416f * (t - 0.1f) / 0.09f) * 0.8f : 0);
+          x = tanhf(sinf(ph) * 6) * (0.6f + 0.4f * sinf(t * PI2 * 750)) * a * 0.6f;
+          break;
+        case 6: // けけっ: 小さな笑い声 3 つ
+        {
+          int k = (int)(t / 0.065f);
+          float u = t - k * 0.065f;
+          f = (1000 + k * 150) * (1 + u * 6);
+          ph += PI2 * f / SR;
+          x = u < 0.04f ? tanhf(sinf(ph) * 2) * sinf(3.1416f * u / 0.04f) : 0;
+          break;
+        }
+        case 7: // ひゅ〜どろ: 下がっていく幽霊の声と、低いどろん
+          f = (760 - 360 * t / L) * (1 + 0.05f * sinf(t * PI2 * 7));
+          ph += PI2 * f / SR;
+          x = sinf(ph) * min(1.0f, t * 12) * min(1.0f, (L - t) * 6) * 0.7f;
+          if (t > 0.28f)
+          {
+            ph2 += PI2 * 75 / SR;
+            x += sinf(ph2) * expf(-(t - 0.28f) * 20);
+          }
+          break;
+        case 8: // ちりん: 小さな鈴
+          ph += PI2 * 1900 / SR;
+          x = (sinf(ph) + 0.6f * sinf(ph * 2.76f) + 0.35f * sinf(ph * 5.4f)) * expf(-t * 9);
+          break;
+        default: // ぷぅ: 低い、とぼけた笛
+          f = 160 - 50 * t / L;
+          ph += PI2 * f / SR;
+          x = tanhf(sinf(ph) * 2) * sinf(3.1416f * t / L);
+          break;
+        }
+        w[i] = x * atk;
+      }
+      set((Sfx)((int)Sfx::Yokai0 + v), VOL[v]);
     }
   }
-  set(Sfx::Yokai, 0.2f);
+  // 穴の妖怪が吐く: ぺっ (息のかたまり) と、玉が飛んでいくひゅん
+  w = newWave(0.4f);
+  {
+    float ph = 0, ph2 = 0, lp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      float t = (float)i / SR, x = 0;
+      // ぷっ: 唇がはじける低い音
+      ph2 += PI2 * (110 + 260 * expf(-t * 60)) / SR;
+      x += sinf(ph2) * expf(-t * 45) * 0.9f;
+      // ぺっ: 2 kHz あたりの息
+      lp += (noise() - lp) * 0.5f;
+      x += lp * sinf(t * PI2 * 2100) * (t < 0.07f ? sinf(3.1416f * t / 0.07f) : 0) * 1.2f;
+      // ひゅん
+      if (t > 0.08f)
+      {
+        float u = t - 0.08f;
+        ph += PI2 * (700 + 1300 * u / 0.32f) / SR;
+        x += sinf(ph) * sinf(3.1416f * min(1.0f, u / 0.32f)) * 0.35f;
+      }
+      w[i] = x * min(1.0f, t * 400);
+    }
+  }
+  set(Sfx::Spit, 0.22f);
   free(tmp);
   tmp = nullptr;
 }
@@ -1260,7 +1349,7 @@ void loopSounds(float *mix, bool mute)
 // 作るのに 50 秒ほどかかるので、一度作ったら /sfx.bin に保存し、次からは読むだけにする (1.4MB ほど)。
 // 見出しに版の番号 (CACHE_KEY) を入れておき、音の作り方を変えて番号を上げたら作りなおす
 const char *const CACHE = "/sfx.bin";
-const char CACHE_KEY[40] = "SKYLARK-SFX v9"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
+const char CACHE_KEY[40] = "SKYLARK-SFX v10"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
 
 bool loadCache()
 {

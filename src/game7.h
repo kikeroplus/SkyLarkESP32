@@ -87,6 +87,7 @@ private:
   int aiT = 0, aiNudgeT = 0;
   float aiP = 0.7f;
 
+  int lastYkSnd = -1;
   int spitT = -1, spitBall = 0; // 10 の穴の妖怪: 顔を出してから数えたフレーム (-1 = 出ていない) と、くわえている玉
   Yokai yk[3]; // 0 = 上の提灯おばけ、1 = 左のから傘おばけ、2 = 右の一つ目小僧
 

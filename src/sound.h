@@ -96,7 +96,18 @@ enum class Sfx
   HoleIn,  // 穴に入る: コトン
   Payout,  // 払い出し: ジャラジャラ
   Feed,    // 玉が打ち出す所へ転がってくる: ゴロゴロ
-  Yokai,   // 妖怪に玉が当たる: ぽよん
+  // 妖怪に玉が当たる: 10 種類からでたらめに鳴らす (Yokai0 から続けて並べる)
+  Yokai0, // ぽよん
+  Yokai1, // ひゅっ
+  Yokai2, // ぽよよん
+  Yokai3, // きゅっ
+  Yokai4, // ぽん
+  Yokai5, // げこっ
+  Yokai6, // けけっ
+  Yokai7, // ひゅ〜どろ
+  Yokai8, // ちりん
+  Yokai9, // ぷぅ
+  Spit,   // 10 の穴の妖怪が玉を吐く: ぺっ、ひゅん
   Count
 };
 
