@@ -65,6 +65,10 @@ private:
     float x, y, k; // k: 0 = 隠れている、1 = 出ている
     int st, t, hitT;
     float ph;
+    // 提灯おばけだけ: 前を向いている / お腹がすいて光っている (このときだけ玉を飲む) / 後ろを向いている (飲めない)
+    bool back, hungry;
+    int moodT, turnT; // 今の様子の残りフレーム、振り向いている残りフレーム
+    float glow;       // 光り具合 (0〜1)
   };
 
   struct Thief // 玉どろぼう (唐草のほっかむりをしたねずみの妖怪)。転がっている玉を追いかけて取り、壁の裏へ逃げる
@@ -177,6 +181,7 @@ private:
   void nudge(int dir);
   void physics();
   void stepYokai();
+  void stepLantern(Yokai &y);
   void resetYokai();
   void stepThief();
   void stepNeko();

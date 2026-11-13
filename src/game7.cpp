@@ -56,8 +56,8 @@ static const int BAKE_N = 9 * 30;   // 化け狸の穴が 10 に化けている�
 static const float BAKE_WIN = 0.5f; // 化けた穴に入ったとき、本当に 10 出る割合 (ほかは葉っぱ)
 static const int PARADE_EVERY = 100, PARADE_N = 14 * 30; // 百鬼夜行: 払い出しの合計がこの数を越えるたびに、この長さ
 static const float PARADE_Y = 140, PARADE_GAP = 30, PARADE_V = 32;
-// 提灯おばけ: 当たった玉を、だいたい 2 回に 1 回飲みこむ (玉はなくなる)
-static const float GULP_P = 0.5f;
+// 提灯おばけ: お腹がすいて光っているときに当たった玉を飲みこむ (玉はなくなる)。後ろを向いているときは飲めない
+static const int TURN_N = 10; // 振り向くのにかかるフレーム
 static const int GULP_IN = 10, GULP_N = 42; // 口へ吸いこむまでと、ふくらんで光り終わるまでのフレーム
 // おばけホール: 開いているあいだ、GH_R より近い玉を吸い寄せ、GH_CAP より近づいたら飲みこむ
 static const float GH_R = 54, GH_PULL = 950, GH_CAP = 5;
@@ -539,7 +539,7 @@ void Game7::resetYokai()
   for (int i = 0; i < 3; i++)
   {
     Yokai &y = yk[i];
-    y = Yokai{0, 0, 0, 0, (int)((1.5f + rnd() * 3) * FPS), 0, rnd() * 6.28f};
+    y = Yokai{0, 0, 0, 0, (int)((1.5f + rnd() * 3) * FPS), 0, rnd() * 6.28f, false, false, FPS, 0, 0};
   }
   th = Thief{};
   th.st = 0;
@@ -1310,6 +1310,7 @@ void Game7::stepYokai()
       y.ph += 0.55f / FPS;
       y.x = 111 + 44 * sinf(y.ph);
       y.y = Y_TOP_Y + 1.5f * sinf(y.ph * 5.3f);
+      stepLantern(y);
     }
     else
     {
@@ -1322,6 +1323,46 @@ void Game7::stepYokai()
   }
 }
 
+// 提灯おばけの様子: 前を向く → お腹がすいて光る (飲む) か 後ろを向く (飲めない) → また前を向く
+void Game7::stepLantern(Yokai &y)
+{
+  if (y.st == 0)
+  {
+    y.back = y.hungry = false;
+    y.turnT = 0;
+    y.glow = 0;
+    y.moodT = (int)((1 + rnd() * 1.5f) * FPS);
+    return;
+  }
+  if (y.turnT > 0)
+  {
+    if (--y.turnT == TURN_N / 2)
+      y.back = !y.back; // 真横を向いたところで、前と後ろが入れかわる
+    if (y.turnT == 0 && !y.back && rnd() < 0.6f) // 前を向き直ったら、たいていお腹がすいている
+    {
+      y.hungry = true;
+      y.moodT = (int)((2.5f + rnd() * 2) * FPS);
+    }
+  }
+  else if (gulpT == 0 && y.st == 2 && --y.moodT <= 0)
+  {
+    if (y.back || (!y.hungry && rnd() < 0.5f) || (y.hungry && rnd() < 0.6f))
+    {
+      // 振り向く (後ろ向き → 前、前 → 後ろ)
+      y.hungry = false;
+      y.turnT = TURN_N;
+      y.moodT = (int)((y.back ? 1.5f + rnd() * 1.5f : 2 + rnd() * 2.5f) * FPS);
+    }
+    else
+    {
+      // 前を向いたまま、お腹がすく / おさまる
+      y.hungry = !y.hungry;
+      y.moodT = (int)((y.hungry ? 2.5f + rnd() * 2 : 1 + rnd() * 1.5f) * FPS);
+    }
+  }
+  float want = y.hungry && y.turnT == 0 ? 1.0f : 0.0f;
+  y.glow += clampf(want - y.glow, -1.0f / (0.25f * FPS), 1.0f / (0.25f * FPS));
+}
 
 void Game7::newGame()
 {
@@ -1526,13 +1567,15 @@ void Game7::physics()
         if (y.hitT < 4)
         {
           y.hitT = 12;
-          if (k == 0 && gulpT == 0 && y.st != 3 && rnd() < GULP_P)
+          if (k == 0 && gulpT == 0 && y.st == 2 && y.hungry && !y.back && y.turnT == 0)
           {
             // 提灯おばけが、ぱくっと飲みこむ
             o.st = 5;
             o.vx = o.vy = 0;
             gulpT = 1;
             gulpBall = i;
+            y.hungry = false; // おなかいっぱい
+            y.moodT = (int)((2 + rnd() * 2) * FPS);
             sfx(Sfx::Yokai3, 0.6f); // きゅっ
             break;
           }
@@ -2125,7 +2168,8 @@ static void stripRows(float top, float bot, int &y0, int &y1)
 
 // 妖怪を 1 匹描く。色は台に合わせて色あせた絵の具。hit: 当たった直後 (目をつぶってびくっとする)
 // side: 1 = 左の壁から、2 = 右の壁から出ているので、壁より外は描かない
-static void drawYokai(int kind, float cx, float cy, float sc, bool hit, int side)
+// 提灯おばけだけ: glow = お腹がすいて光っている具合、back = 後ろを向いている、sx = 振り向くときの横幅 (0〜1)
+static void drawYokai(int kind, float cx, float cy, float sc, bool hit, int side, float glow = 0, bool back = false, float sx = 1)
 {
   if (sc < 0.05f)
     return;
@@ -2139,7 +2183,7 @@ static void drawYokai(int kind, float cx, float cy, float sc, bool hit, int side
     {
       if (((side == 1 || side == 3) && px <= XL + 1) || ((side == 2 || side == 3) && px >= XD - 1))
         continue;
-      float dx = (px - cx) / sc, dy = (py - cy) / sc; // 大きさ 1 のときの座標
+      float dx = (px - cx) / (sc * sx), dy = (py - cy) / sc; // 大きさ 1 のときの座標
       uint32_t c = 0;
       bool on = false;
       if (kind == 0)
@@ -2154,9 +2198,13 @@ static void drawYokai(int kind, float cx, float cy, float sc, bool hit, int side
           c = mix(0xB86040, 0x7A3424, clampf((dx + 3) / 9, 0, 1));
           if (((int)floorf(dy + 40)) % 3 == 0)
             c = mix(c, 0x5A2418, 0.45f); // 竹の骨
+          if (glow > 0) // 中に火がともって、紙が明るく透ける
+            c = mix(c, mix(0xF0B860, 0xFFE8A8, clampf(1 - e, 0, 1)), 0.7f * glow);
+          if (back && fabsf(dx) < 0.6f)
+            c = mix(c, 0x3A1810, 0.5f); // 紙の継ぎ目
           on = true;
         }
-        if (dy > 3 && dy < 7 && dx > 0.3f && dx < 2.6f)
+        if (!back && dy > 3 && dy < 7 && dx > 0.3f && dx < 2.6f)
           c = 0xB04848, on = true; // 舌
       }
       else if (kind == 1)
@@ -2196,6 +2244,11 @@ static void drawYokai(int kind, float cx, float cy, float sc, bool hit, int side
       }
       if (!on)
         continue;
+      if (back)
+      {
+        d2::P(px, py, c); // 後ろ向き: 顔はない
+        continue;
+      }
       // ひとつ目 (当たった直後は閉じる)
       float ex = kind == 1 ? 0 : -0.3f, ey = kind == 0 ? -1.6f : kind == 1 ? -1 : -1, er = kind == 2 ? 2.9f : 2.4f;
       float edx = dx - ex, edy = dy - ey, ed = sqrtf(edx * edx + edy * edy);
@@ -2705,7 +2758,17 @@ void Game7::drawDynamic()
       sc *= 1 + 0.3f * full;
     if (i == 0) // 左右の妖怪は壁の裏から出てくるので、影は描かない (壁にかかる)
       d2::C(y.x + 2, y.y + 3, YR * sc, 0x000000, 60);
-    drawYokai(i, y.x, y.y, sc, y.hitT > 0 || (i == 0 && gulpT > 0), i);
+    if (i == 0)
+    {
+      // お腹がすいているときは、まわりがぼうっと明るい。振り向くときは横に細くなる
+      float g = y.glow * (0.8f + 0.2f * sinf(y.ph * 23));
+      if (g > 0)
+        d2::C(y.x, y.y, 12 * sc, 0xFFB050, (int)(45 * g));
+      float sx = y.turnT > 0 ? std::max(0.15f, fabsf(cosf(PI_F * (TURN_N - y.turnT) / TURN_N))) : 1;
+      drawYokai(0, y.x, y.y, sc, y.hitT > 0 || gulpT > 0, 0, g, y.back, sx);
+    }
+    else
+      drawYokai(i, y.x, y.y, sc, y.hitT > 0, i);
     if (full > 0)
     {
       d2::C(y.x, y.y + 1, 7 * sc, 0xFFC860, (int)(70 * full));
