@@ -44,6 +44,18 @@ static const float TH_GRAB = 10;    // 玉の中心がこれより近づくと�
 static const float TH_R = 7;        // 逃げているときの当たりの半径 (ほかの玉が当たると落とす)
 static const float TH_CHASE = 55, TH_RUN = 75, TH_FLEE = 110, TH_WANDER = 45; // 追いかける・玉を持って逃げる・手ぶらで逃げる速さ
 static const float TH_OUT = 16;     // 壁からこれだけ裏へ入ったら消える
+static const float TH_FEAR = 36;    // ほかの妖怪がこれより近いと、びくっとしてよける
+static const int TRIP_N = 26;       // 釘につまずいて転んでいるフレーム
+// 玉どろぼうの巣: 左右の壁の、この高さにあるねずみの穴。盗んだ玉がたまり、NEST_FULL 個であふれて台へ戻る
+static const float NEST_Y = 266, NEST_R = 11;
+static const int NEST_FULL = 10;
+static const float NEST_PILE[10][2] = {{2.5f, 8}, {6.6f, 8.3f}, {10.7f, 8.6f}, {4.5f, 4.4f}, {8.6f, 4.6f}, {2.5f, 0.6f}, {6.6f, 0.8f}, {4.5f, -3.2f}, {2.5f, -7}, {6.6f, -6.8f}};
+static const int KOBAN_V = 3;       // 玉を当てて取り返したときの小判の払い出し
+static const float NEKO_V = 80, NEKO_R = 8; // 猫又の速さと当たりの半径
+static const int BAKE_N = 9 * 30;   // 化け狸の穴が 10 に化けているフレーム
+static const float BAKE_WIN = 0.5f; // 化けた穴に入ったとき、本当に 10 出る割合 (ほかは葉っぱ)
+static const int PARADE_EVERY = 100, PARADE_N = 14 * 30; // 百鬼夜行: 払い出しの合計がこの数を越えるたびに、この長さ
+static const float PARADE_Y = 140, PARADE_GAP = 30, PARADE_V = 32;
 
 // 穴と払い出しの数
 struct Hole
@@ -385,6 +397,24 @@ void Game7::buildTable()
       if (d2::h2(x, y) > 0.6f)
         d2::C(x + (d2::h2(y, x) - 0.5f) * 3, y, 1.5f + d2::h2(x + 1, y) * 1.5f, 0x7A3E18, 150);
     }
+  // 玉どろぼうの巣: 左右の壁をかじって開けた、ねずみの穴
+  for (int sd = 0; sd < 2; sd++)
+  {
+    float wx = sd ? XD : XL, dir = sd ? -1 : 1;
+    for (int y = (int)(NEST_Y - NEST_R - 2); y <= (int)(NEST_Y + NEST_R + 2); y++)
+      for (int x = (int)(wx - 3); x <= (int)(wx + NEST_R + 3) || x <= (int)(wx + 3); x++)
+      {
+        int X = sd ? (int)(2 * wx) - x : x; // 右は左右を返す
+        float dx = (X - wx) * dir, dy = y - NEST_Y;
+        if (dx < -2)
+          continue;
+        float d = hypotf(std::max(0.0f, dx), dy) + (d2::h2(X * 5, y * 3) - 0.5f) * 1.6f; // かじったぎざぎざ
+        if (d > NEST_R + 1.5f)
+          continue;
+        uint32_t c = d > NEST_R - 1 ? mix(0x6A4424, 0x3A2412, d2::h2(X, y)) : mix(0x0C0806, 0x22160C, clampf((dy + NEST_R) / (2 * NEST_R), 0, 1) * 0.8f);
+        d2::P(X, y, c);
+      }
+  }
   // 釘: 影、さびのしみ、頭
   for (int i = 0; i < nN; i++)
   {
@@ -437,6 +467,15 @@ bool Game7::begin()
   if (!bg)
     return false;
   buildTable();
+  // 百鬼夜行の夜: 青く暗くした台を 3 段階
+  for (int k = 0; k < 3; k++)
+  {
+    bgDark[k] = (uint16_t *)ps_malloc(W * H * 2);
+    if (!bgDark[k])
+      return false;
+    for (int i = 0; i < W * H; i++)
+      bgDark[k][i] = i < HUD_H * W ? bg[i] : d2::c565(mix(to888(bg[i]), 0x0A0E26, 0.2f * (k + 1)));
+  }
   startDemo();
   return true;
 }
@@ -472,36 +511,167 @@ void Game7::resetYokai()
   th.st = 0;
   th.t = (int)((8 + rnd() * 8) * FPS);
   th.face = 1;
+  neko = Neko{};
+  neko.t = (int)((30 + rnd() * 30) * FPS);
+  for (auto &n : nest)
+    n = Nest{};
+  bake = Bake{-1, (int)((15 + rnd() * 15) * FPS), 0, -1};
+  zw = Warashi{};
+  zw.t = (int)((50 + rnd() * 60) * FPS);
+  coin.t = 0;
+  paradeT = -1;
+  nextParade = PARADE_EVERY;
 }
 
-// 玉どろぼう: 隠れている (st 0) → 壁の裏から出て玉を追う (1) → 取ったらにやりとし、しばらく持ったままうろうろしてから逃げる (2) / あきらめて帰る (3)
+// 近くに出ているほかの妖怪から離れる向き (fx, fy) と、怖さ (0〜1)
+float Game7::yokaiFear(float x, float y, float &fx, float &fy)
+{
+  fx = fy = 0;
+  float best = 0;
+  for (int i = 0; i < 3; i++)
+  {
+    const Yokai &q = yk[i];
+    if (q.k < 0.6f)
+      continue;
+    float dx = x - q.x, dy = y - q.y, d = hypotf(dx, dy);
+    if (d < TH_FEAR && d > 0.1f)
+    {
+      float s = 1 - d / TH_FEAR;
+      fx += dx / d * s;
+      fy += dy / d * s;
+      best = std::max(best, s);
+    }
+  }
+  return best;
+}
+
+void Game7::addPop(float x, float y, int v, int kind)
+{
+  for (auto &p : pops)
+    if (p.t <= 0)
+    {
+      p = Pop{x, y, v, 40, kind};
+      return;
+    }
+}
+
+// 払い出す。座敷わらしがいるあいだは 2 倍。払い出しの合計が節目を越えたら百鬼夜行
+void Game7::pay(float x, float y, int v)
+{
+  if (zw.k > 0.5f)
+    v *= 2;
+  pool += v;
+  win += v;
+  statWin += v;
+  sfx(Sfx::Payout, v >= 3 ? 1 : 0.6f);
+  addPop(x, y, v, 0);
+  if (win >= nextParade)
+  {
+    while (win >= nextParade)
+      nextParade += PARADE_EVERY;
+    if (paradeT < 0)
+    {
+      paradeT = 0;
+      sfx(Sfx::Matsuri);
+    }
+  }
+}
+
+// 玉どろぼうが持っている玉を落として、手ぶらで逃げる。koban: 玉を当てて取り返したので、ごほうびの小判も落とす
+void Game7::thiefDrop(bool koban, float nx)
+{
+  Ball &c = b[th.ball];
+  c.st = 1;
+  c.x = clampf(th.x + th.face * 7, XL + RB, XD - RB);
+  c.y = clampf(th.y, 100, 290);
+  c.vx = -nx * 90 + (rnd() - 0.5f) * 40;
+  c.vy = -70;
+  c.t = 0;
+  c.nocap = 0;
+  th.st = 3;
+  th.hitT = 14;
+  th.trip = 0;
+  th.exit = th.x < 111 ? -1 : 1;
+  sfx(Sfx::Yokai3); // きゅっ
+  if (koban && coin.t <= 0)
+  {
+    coin = Coin{th.x, th.y - 6, -140, 1};
+    sfx(Sfx::Koban);
+  }
+}
+
+// 玉どろぼう: 隠れている (st 0) → 巣から出て玉を追う (1) → 取ったらにやりとし、しばらく持ったままうろうろしてから巣へ逃げる (2) / あきらめて帰る (3)
 void Game7::stepThief()
 {
   Thief &h = th;
   if (h.hitT > 0)
     h.hitT--;
-  auto toExit = [&](float v) {
-    float ex = h.exit < 0 ? XL - TH_OUT : XD + TH_OUT;
-    h.vx = h.exit * v;
-    h.vy *= 0.9f;
-    h.face = h.exit;
+  if (h.tripCool > 0)
+    h.tripCool--;
+  if (h.fearCool > 0)
+    h.fearCool--;
+  auto moveOn = [&]() {
     h.x += h.vx / FPS;
     h.y = clampf(h.y + h.vy / FPS, 100, 292);
-    h.ph += fabsf(h.vx) / FPS * 0.5f;
-    return h.exit < 0 ? h.x <= ex : h.x >= ex;
+    if (fabsf(h.vx) > 4)
+      h.face = h.vx > 0 ? 1 : -1;
+    h.ph += hypotf(h.vx, h.vy) / FPS * 0.5f;
+  };
+  // (tx, ty) へ向かう。ほかの妖怪が近いと、びくっとしてよける
+  auto steer = [&](float tx, float ty, float sp, float acc) {
+    float dx = tx - h.x, dy = ty - h.y, d = std::max(1.0f, hypotf(dx, dy));
+    float ux = dx / d, uy = dy / d, fx, fy;
+    if (yokaiFear(h.x, h.y, fx, fy) > 0)
+    {
+      ux += fx * 2.5f;
+      uy += fy * 2.5f;
+      float l = std::max(0.01f, hypotf(ux, uy));
+      ux /= l;
+      uy /= l;
+      sp *= 1.4f;
+      if (h.fearCool == 0)
+      {
+        h.fearCool = 45;
+        h.hitT = 8;
+        sfx(Sfx::Yokai3, 0.5f);
+        if (h.st == 2) // 反対側へうろうろしなおす
+        {
+          h.tx = h.x < 111 ? XD - 40 : XL + 40;
+          h.ty = 120 + rnd() * 160;
+        }
+      }
+    }
+    h.vx += (ux * sp - h.vx) * acc;
+    h.vy += (uy * sp - h.vy) * acc;
+  };
+  // 巣 (exit の側の壁の穴) へ向かい、入りきったら true
+  auto toNest = [&](float v) {
+    float wx = h.exit < 0 ? XL : XD, mouthX = wx - h.exit * 14, outX = wx + h.exit * TH_OUT;
+    bool inside = h.exit < 0 ? h.x > XL + 2 : h.x < XD - 2;
+    float tx = inside && fabsf(h.y - NEST_Y) > 3 ? mouthX : outX;
+    float dx = tx - h.x, dy = NEST_Y - h.y, d = std::max(1.0f, hypotf(dx, dy));
+    h.vx += (dx / d * v - h.vx) * 0.35f;
+    h.vy += (dy / d * v - h.vy) * 0.35f;
+    moveOn();
+    if (inside && fabsf(h.y - NEST_Y) > 6)
+      h.x = clampf(h.x, XL + 9, XD - 9);
+    return h.exit < 0 ? h.x <= outX + 1 : h.x >= outX - 1;
   };
   switch (h.st)
   {
   case 0:
+    if (neko.st != 0 && h.t < FPS)
+      h.t = FPS; // 猫又がいるあいだは出てこない
     if (--h.t <= 0)
     {
       h.exit = rnd() < 0.5f ? -1 : 1;
       h.x = h.exit < 0 ? XL - TH_OUT : XD + TH_OUT;
-      h.y = 150 + rnd() * 130;
+      h.y = NEST_Y;
       h.vx = h.vy = 0;
       h.face = -h.exit;
       h.st = 1;
       h.t = (int)((6 + rnd() * 4) * FPS);
+      h.trip = 0;
     }
     break;
   case 1:
@@ -519,25 +689,19 @@ void Game7::stepThief()
         bd = d, best = i;
     }
     float tx = best >= 0 ? b[best].x : 111 + 50 * sinf(h.ph * 0.13f), ty = best >= 0 ? b[best].y : h.y;
-    float dx = tx - h.x, dy = ty - h.y, d = std::max(1.0f, hypotf(dx, dy));
-    float sp = best >= 0 ? TH_CHASE : TH_CHASE * 0.5f;
-    h.vx += (dx / d * sp - h.vx) * 0.25f;
-    h.vy += (dy / d * sp - h.vy) * 0.25f;
-    h.x += h.vx / FPS;
-    h.y = clampf(h.y + h.vy / FPS, 100, 292);
-    // 出てきたら壁の内側にとどまる
+    steer(tx, ty, best >= 0 ? TH_CHASE : TH_CHASE * 0.5f, 0.25f);
+    // 巣から出てくるあいだは、まっすぐ横へ
+    if (h.exit < 0 ? h.x < XL + 10 : h.x > XD - 10)
+    {
+      h.vx = -h.exit * 45;
+      h.vy = 0;
+    }
+    moveOn();
     if (h.x > XL + 9 && h.x < XD - 9)
       h.x = clampf(h.x, XL + 9, XD - 9);
-    else if (h.exit < 0)
-      h.x = std::min(h.x, XD - 9.0f);
-    else
-      h.x = std::max(h.x, XL + 9.0f);
-    if (fabsf(h.vx) > 4)
-      h.face = h.vx > 0 ? 1 : -1;
-    h.ph += hypotf(h.vx, h.vy) / FPS * 0.5f;
     if (--h.t <= 0)
     {
-      h.st = 3; // あきらめて、近いほうの壁へ帰る
+      h.st = 3; // あきらめて、近いほうの巣へ帰る
       h.exit = h.x < 111 ? -1 : 1;
     }
     break;
@@ -545,6 +709,17 @@ void Game7::stepThief()
   case 2:
   {
     Ball &o = b[h.ball];
+    if (h.trip > 0)
+    {
+      // 釘につまずいて転んだ: 玉が手から跳ねて、起き上がってまた抱える
+      h.trip--;
+      h.vx *= 0.8f;
+      h.vy *= 0.8f;
+      float k = std::min(1.0f, (TRIP_N - h.trip) / (float)TRIP_N * 1.6f), up = sinf(PI_F * k);
+      o.x = h.x + h.face * (7 + 9 * up);
+      o.y = h.y + 3 - 14 * up;
+      break;
+    }
     if (h.t > 0)
     {
       h.t--; // 取った玉を見せびらかして、にやりとする
@@ -555,8 +730,7 @@ void Game7::stepThief()
     {
       // 玉を持ったまま、しばらく台の上をうろうろする。ときどき立ち止まってにやり
       h.wt--;
-      float dx = h.tx - h.x, dy = h.ty - h.y, d = hypotf(dx, dy);
-      if (d < 6)
+      if (hypotf(h.tx - h.x, h.ty - h.y) < 6)
       {
         h.tx = XL + 20 + rnd() * (XD - XL - 40);
         h.ty = 110 + rnd() * 175;
@@ -564,24 +738,39 @@ void Game7::stepThief()
           h.t = 12 + (int)(rnd() * 20);
       }
       else
+        steer(h.tx, h.ty, TH_WANDER * (0.8f + 0.4f * sinf(h.ph * 0.37f)), 0.2f); // 足取りに緩急
+      moveOn();
+      h.x = clampf(h.x, XL + 9, XD - 9);
+      // 足もとの釘につまずく
+      if (!h.tripCool && hypotf(h.vx, h.vy) > 25)
       {
-        float sp = TH_WANDER * (0.8f + 0.4f * sinf(h.ph * 0.37f)); // 足取りに緩急
-        h.vx += (dx / d * sp - h.vx) * 0.2f;
-        h.vy += (dy / d * sp - h.vy) * 0.2f;
+        float fx = h.x + h.face * 3, fy = h.y + 6;
+        for (int k = 0; k < nN; k++)
+          if (fabsf(NX[k] - fx) < 4 && fabsf(NY[k] - fy) < 4)
+          {
+            if (rnd() < 0.06f)
+            {
+              h.trip = TRIP_N;
+              h.tripCool = 3 * FPS;
+              sfx(Sfx::Yokai4, 0.8f); // ぽん
+            }
+            break;
+          }
       }
-      h.x = clampf(h.x + h.vx / FPS, XL + 9, XD - 9);
-      h.y = clampf(h.y + h.vy / FPS, 100, 292);
-      if (fabsf(h.vx) > 4)
-        h.face = h.vx > 0 ? 1 : -1;
-      h.ph += hypotf(h.vx, h.vy) / FPS * 0.5f;
       if (h.wt == 0)
-        h.exit = h.x < 111 ? -1 : 1; // 飽きたら、近いほうの壁へ
+        h.exit = h.x < 111 ? -1 : 1; // 飽きたら、近いほうの巣へ
     }
-    else if (toExit(TH_RUN))
+    else if (toNest(TH_RUN))
     {
-      // 壁の裏へ逃げきった: 玉はなくなる
+      // 巣へ逃げきった: 玉は巣にたまり、NEST_FULL 個であふれて台へ戻ってくる
       o.st = 0;
       statStolen++;
+      Nest &n = nest[h.exit < 0 ? 0 : 1];
+      if (n.spill == 0 && ++n.n >= NEST_FULL)
+      {
+        n.spill = n.n;
+        n.spillT = 25;
+      }
       h.st = 0;
       h.t = (int)((12 + rnd() * 12) * FPS);
       sfx(Sfx::Yokai6, 0.8f); // けけっ
@@ -592,7 +781,7 @@ void Game7::stepThief()
     break;
   }
   default:
-    if (toExit(TH_FLEE))
+    if (toNest(neko.st == 1 ? TH_FLEE * 0.85f : TH_FLEE))
     {
       h.st = 0;
       h.t = (int)((10 + rnd() * 10) * FPS);
@@ -601,12 +790,204 @@ void Game7::stepThief()
   }
 }
 
+// 猫又: 玉どろぼうが台にいると、まれに反対側の壁から出てきて追いかけ回す。どろぼうは玉を放り出して巣へ逃げる
+void Game7::stepNeko()
+{
+  Neko &n = neko;
+  if (n.hitT > 0)
+    n.hitT--;
+  float outX = n.side ? XD + 16 : XL - 16;
+  switch (n.st)
+  {
+  case 0:
+    if (--n.t <= 0)
+    {
+      if ((th.st == 1 || th.st == 2) && th.x > XL + 14 && th.x < XD - 14 && paradeT < 0)
+      {
+        n.side = th.x < 111 ? 1 : 0; // どろぼうから遠いほうの壁から
+        n.x = outX = n.side ? XD + 16 : XL - 16;
+        n.y = clampf(th.y, 110, 290);
+        n.vx = n.vy = 0;
+        n.face = n.side ? -1 : 1;
+        n.st = 1;
+        n.t = 8 * FPS;
+        sfx(Sfx::Neko);
+        // どろぼうはびっくりして、玉を放り出して猫と反対の巣へ
+        if (th.st == 2)
+          thiefDrop(false, n.side ? -1 : 1);
+        th.st = 3;
+        th.hitT = 14;
+        th.exit = n.side ? -1 : 1;
+      }
+      else
+        n.t = 2 * FPS;
+    }
+    break;
+  case 1:
+  {
+    if (th.st == 0 || --n.t <= 0)
+    {
+      n.st = 2; // 追いはらって満足
+      n.t = (int)(2.2f * FPS);
+      n.vx = n.vy = 0;
+      if (th.st == 0)
+        sfx(Sfx::Neko, 0.7f);
+      break;
+    }
+    float dx = th.x - n.x, dy = th.y - n.y, d = std::max(1.0f, hypotf(dx, dy));
+    n.vx += (dx / d * NEKO_V - n.vx) * 0.15f;
+    n.vy += (dy / d * NEKO_V - n.vy) * 0.15f;
+    if (n.side ? n.x > XD - 11 : n.x < XL + 11)
+    {
+      n.vx = (n.side ? -1 : 1) * 60;
+      n.vy = 0;
+    }
+    n.x += n.vx / FPS;
+    n.y = clampf(n.y + n.vy / FPS, 100, 292);
+    if (n.x > XL + 11 && n.x < XD - 11)
+      n.x = clampf(n.x, XL + 11, XD - 11);
+    if (fabsf(n.vx) > 4)
+      n.face = n.vx > 0 ? 1 : -1;
+    n.ph += hypotf(n.vx, n.vy) / FPS * 0.4f;
+    break;
+  }
+  case 2:
+    n.ph += 0.02f;
+    if (--n.t <= 0)
+      n.st = 3;
+    break;
+  default:
+    // 来た壁へ、ゆうゆうと帰る
+    n.vx = (n.side ? 1 : -1) * 55;
+    n.face = n.side ? 1 : -1;
+    n.x += n.vx / FPS;
+    n.ph += 55.0f / FPS * 0.4f;
+    if (n.side ? n.x >= outX : n.x <= outX)
+    {
+      n.st = 0;
+      n.t = (int)((40 + rnd() * 40) * FPS);
+    }
+    break;
+  }
+}
+
+// 巣からあふれる玉、化け狸の穴、座敷わらし、小判、百鬼夜行
+void Game7::stepExtras()
+{
+  // 巣があふれる: 玉を 1 個ずつ台へ転がり出す (台の玉がいっぱいなら持ち玉へ)
+  for (int s = 0; s < 2; s++)
+  {
+    Nest &n = nest[s];
+    if (n.spill <= 0 || --n.spillT > 0)
+      continue;
+    if (n.spill == n.n && n.n >= NEST_FULL)
+    {
+      addPop(s ? XD - 24 : XL + 24, NEST_Y - 18, 0, 2);
+      sfx(Sfx::Payout, 0.8f);
+    }
+    n.spillT = 5;
+    bool put = false;
+    for (int i = 0; i < NB && !put; i++)
+      if (b[i].st == 0)
+      {
+        float dir = s ? -1 : 1;
+        b[i] = Ball{s ? XD - RB - 1 : XL + RB + 1, NEST_Y + 2, dir * (70 + rnd() * 80), -40 - rnd() * 70, 1, 0, 0, rnd() * RUB_TILT, 0};
+        put = true;
+        sfx(Sfx::BallClick, 0.4f);
+      }
+    if (!put)
+      pool++;
+    n.n--;
+    n.spill--;
+  }
+  // 化け狸: 1 の穴をひとつ選んで、しばらく 10 に化けさせる
+  if (bake.puffT > 0)
+    bake.puffT--;
+  if (bake.hole < 0)
+  {
+    if (--bake.t <= 0)
+    {
+      int cand[NH], nc = 0;
+      for (int h = 0; h < NH; h++)
+        if (HOLES[h].v == 1)
+          cand[nc++] = h;
+      bake.hole = cand[(int)(rnd() * nc) % nc];
+      bake.t = BAKE_N;
+      bake.puffT = 14;
+      bake.puffHole = bake.hole;
+      sfx(Sfx::Doron);
+    }
+  }
+  else if (--bake.t <= 0)
+  {
+    bake.puffT = 14;
+    bake.puffHole = bake.hole;
+    bake.hole = -1;
+    bake.t = (int)((30 + rnd() * 25) * FPS);
+    sfx(Sfx::Doron, 0.5f);
+  }
+  // 座敷わらし: 隠れている (0) → 現れる (1) → 座っている (2) → 消える (3)
+  switch (zw.st)
+  {
+  case 0:
+    if (--zw.t <= 0)
+    {
+      zw.x = rnd() < 0.5f ? 19 : 202;
+      zw.y = 294;
+      zw.st = 1;
+      sfx(Sfx::Yokai8); // ちりん
+    }
+    break;
+  case 1:
+    zw.k = std::min(1.0f, zw.k + 1.0f / (0.8f * FPS));
+    if (zw.k >= 1)
+    {
+      zw.st = 2;
+      zw.t = 12 * FPS;
+    }
+    break;
+  case 2:
+    if (--zw.t <= 0)
+      zw.st = 3;
+    break;
+  default:
+    zw.k = std::max(0.0f, zw.k - 1.0f / (0.8f * FPS));
+    if (zw.k <= 0)
+    {
+      zw.st = 0;
+      zw.t = (int)((80 + rnd() * 80) * FPS);
+    }
+    break;
+  }
+  // 小判: ひらりと跳ねて落ち、払い出す
+  if (coin.t > 0)
+  {
+    coin.t++;
+    coin.vy += 500.0f / FPS;
+    coin.y += coin.vy / FPS;
+    if (coin.t > 22)
+    {
+      coin.t = 0;
+      pay(coin.x, coin.y - 6, KOBAN_V);
+    }
+  }
+  if (paradeT >= 0 && ++paradeT > PARADE_N)
+    paradeT = -1;
+}
+
 // 妖怪: 隠れている (st 0) → 出てくる (1) → 出ている (2) → 引っこむ (3) → 隠れている
 void Game7::stepYokai()
 {
   for (int i = 0; i < 3; i++)
   {
     Yokai &y = yk[i];
+    if (paradeT >= 0) // 百鬼夜行のあいだは、みんな出てくる
+    {
+      if (y.st == 0)
+        y.t = 0;
+      if (y.st == 2 && y.t < 30)
+        y.t = 30;
+    }
     switch (y.st)
     {
     case 0:
@@ -668,6 +1049,25 @@ void Game7::debugEnd()
 {
   cheated = true;
   pool = 0;
+}
+
+void Game7::debugEvent(char c)
+{
+  if (c == 'P' && paradeT < 0)
+  {
+    paradeT = 0;
+    sfx(Sfx::Matsuri);
+  }
+  else if (c == 'B' && bake.hole < 0)
+    bake.t = 1;
+  else if (c == 'W' && zw.st == 0)
+    zw.t = 1;
+  else if (c == 'T' && th.st == 0)
+    th.t = 1;
+  else if (c == 'K' && neko.st == 0)
+    neko.t = 1;
+  else if (c == 'E')
+    nest[0].n = nest[1].n = NEST_FULL - 1;
 }
 
 bool Game7::laneBusy() const
@@ -849,17 +1249,36 @@ void Game7::physics()
             o.vx -= (1 + E_YOKAI) * vn * nx;
             o.vy -= (1 + E_YOKAI) * vn * ny;
           }
-          // 取った玉を落として、手ぶらで逃げる
-          Ball &c = b[th.ball];
-          c.st = 1;
-          c.x = clampf(th.x + th.face * 7, XL + RB, XD - RB);
-          c.y = th.y;
-          c.vx = -nx * 90 + (rnd() - 0.5f) * 40;
-          c.vy = -70;
-          c.t = 0;
-          th.st = 3;
-          th.hitT = 14;
-          sfx(Sfx::Yokai3); // きゅっ
+          thiefDrop(true, nx); // 取り返した: 玉を落とし、ごほうびの小判も落とす
+        }
+      }
+      // 猫又: 当たるとはじく
+      if (neko.st != 0 && neko.x > XL + 4 && neko.x < XD - 4)
+      {
+        const float RR = NEKO_R + BALL_R;
+        float dx = o.x - neko.x, dy = o.y - neko.y, dd = dx * dx + dy * dy;
+        if (dd < RR * RR && dd > 1e-6f)
+        {
+          float d = sqrtf(dd), nx = dx / d, ny = dy / d;
+          o.x = neko.x + nx * RR;
+          o.y = neko.y + ny * RR;
+          float vn = o.vx * nx + o.vy * ny;
+          if (vn < 0)
+          {
+            o.vx -= (1 + E_YOKAI) * vn * nx;
+            o.vy -= (1 + E_YOKAI) * vn * ny;
+          }
+          vn = o.vx * nx + o.vy * ny;
+          if (vn < KICK_YOKAI)
+          {
+            o.vx += (KICK_YOKAI - vn) * nx;
+            o.vy += (KICK_YOKAI - vn) * ny;
+          }
+          if (neko.hitT < 4)
+          {
+            neko.hitT = 12;
+            sfx(Sfx::Yokai1, 0.7f); // ひゅっ
+          }
         }
       }
     }
@@ -1019,6 +1438,8 @@ void Game7::stepBoard(const Input *in)
   stepPlunger(pull);
   stepYokai();
   stepThief();
+  stepNeko();
+  stepExtras();
   if (lockT > 0)
     lockT--;
   if (shakeT > 0)
@@ -1058,16 +1479,25 @@ void Game7::stepBoard(const Input *in)
     {
       o.st = 0;
       int v = HOLES[o.hole].v;
-      pool += v;
-      win += v;
-      statWin += v;
-      sfx(Sfx::Payout, v >= 3 ? 1 : 0.6f);
-      for (auto &p : pops)
-        if (p.t <= 0)
+      if (bake.hole == o.hole)
+      {
+        // 化けた穴: 本当に 10 出るか、狸の葉っぱ (はずれ) か。どちらでも化けの皮ははがれる
+        bake.puffT = 14;
+        bake.puffHole = bake.hole;
+        bake.hole = -1;
+        bake.t = (int)((30 + rnd() * 25) * FPS);
+        sfx(Sfx::Doron, 0.7f);
+        if (rnd() < BAKE_WIN)
+          v = 10;
+        else
         {
-          p = Pop{HOLES[o.hole].x, HOLES[o.hole].y - 10, v, 40};
-          break;
+          v = 0;
+          addPop(HOLES[o.hole].x, HOLES[o.hole].y - 10, 0, 1);
+          sfx(Sfx::Yokai9); // ぷぅ
         }
+      }
+      if (v > 0)
+        pay(HOLES[o.hole].x, HOLES[o.hole].y - 10, v);
     }
     // 引っかかって止まった玉は少し押す
     if (o.st == 1 && o.x < XD)
@@ -1347,7 +1777,7 @@ static void drawYokai(int kind, float cx, float cy, float sc, bool hit, int side
   for (int py = ry0; py <= ry1; py++)
     for (int px = (int)floorf(cx - R); px <= (int)ceilf(cx + R); px++)
     {
-      if ((side == 1 && px <= XL + 1) || (side == 2 && px >= XD - 1))
+      if (((side == 1 || side == 3) && px <= XL + 1) || ((side == 2 || side == 3) && px >= XD - 1))
         continue;
       float dx = (px - cx) / sc, dy = (py - cy) / sc; // 大きさ 1 のときの座標
       uint32_t c = 0;
@@ -1455,9 +1885,9 @@ static void drawHoleYokai(float hx, float hy, float k, bool mouth)
 
 // 玉どろぼう: 灰色のねずみの妖怪に、緑の唐草の手ぬぐいでほっかむり (あごの下で結ぶ)。face: 向き、ph: 走る足、grin: にやり、hit: 当たってびくっ
 // 壁の裏にいる所は描かない
-static void drawThief(float cx, float cy, int face, float ph, bool grin, bool hit)
+static void drawThief(float cx, float cy, int face, float ph, bool grin, bool hit, bool fallen = false)
 {
-  float bob = fabsf(sinf(ph)) * -1.2f;
+  float bob = fallen ? 3 : fabsf(sinf(ph)) * -1.2f;
   cy += bob;
   if (hit)
     cy -= 1.5f;
@@ -1469,7 +1899,7 @@ static void drawThief(float cx, float cy, int face, float ph, bool grin, bool hi
     {
       if (px <= XL + 1 || px >= XD - 1)
         continue;
-      float dx = (px - cx) * face, dy = py - cy;
+      float dx = (px - cx) * face, dy = fallen ? cy - py : py - cy; // 転ぶと、ひっくり返って足が上
       uint32_t c = 0;
       bool on = false;
       // しっぽ: 後ろへ細く、くねらせる
@@ -1533,9 +1963,231 @@ static void drawThief(float cx, float cy, int face, float ph, bool grin, bool hi
   for (int k = -1; k <= 1; k += 2)
     for (float u = 0; u < 4; u += 0.7f)
     {
-      float x = cx + face * (8.6f + u), y = cy + 0.2f + k * u * 0.35f;
+      float x = cx + face * (8.6f + u), y = cy + (fallen ? -0.2f : 0.2f) + k * u * 0.35f;
       if (x > XL + 1 && x < XD - 1)
         d2::P(x, y, 0x3A3028, 160);
+    }
+  // 目を回した星
+  if (fallen)
+    for (int k = 0; k < 3; k++)
+    {
+      float a = ph * 0 + k * 2.094f + micros() * 0.000008f;
+      float x = cx + face * 3 + cosf(a) * 6, y = cy + 6 + sinf(a) * 2;
+      d2::P(x, y, 0xF0D050);
+      d2::P(x + 1, y, 0xF0D050, 120);
+      d2::P(x - 1, y, 0xF0D050, 120);
+      d2::P(x, y + 1, 0xF0D050, 120);
+      d2::P(x, y - 1, 0xF0D050, 120);
+    }
+}
+
+// 猫又: 色あせた三毛の猫に、ふたまたのしっぽ。content: 満足して目を細める、hit: 当たってびくっ
+static void drawNeko(float cx, float cy, int face, float ph, bool content, bool hit, bool sitting)
+{
+  cy += sitting ? 0 : fabsf(sinf(ph)) * -1.3f;
+  if (hit)
+    cy -= 1.5f;
+  int step = sinf(ph) > 0 ? 1 : -1;
+  int ry0, ry1;
+  stripRows(cy - 17, cy + 10, ry0, ry1);
+  for (int py = ry0; py <= ry1; py++)
+    for (int px = (int)floorf(cx - 17); px <= (int)ceilf(cx + 15); px++)
+    {
+      if (px <= XL + 1 || px >= XD - 1)
+        continue;
+      float dx = (px - cx) * face, dy = py - cy;
+      uint32_t c = 0;
+      bool on = false;
+      // ふたまたのしっぽ: 後ろから上へ、2 本に分かれてゆらゆら
+      if (dx < -6 && dx > -16)
+      {
+        float u = -(dx + 6); // 0〜10
+        for (int k = 0; k < 2; k++)
+        {
+          float ty = 0 - u * 0.9f - (k ? u * u * 0.06f : -u * u * 0.03f) + 1.2f * sinf(u * 0.5f + ph * 0.8f + k * 1.5f);
+          float tx = k ? -u * 0.15f : u * 0.25f;
+          if (fabsf(dy - ty) < 1.1f - u * 0.03f && fabsf(tx) < 4)
+          {
+            c = u > 7.5f ? 0x3A2E26 : 0xD2C6A8;
+            on = true;
+          }
+        }
+      }
+      // 足
+      if (!sitting)
+      {
+        float f1 = -4 + step * 1.8f, f2 = 4 - step * 1.8f;
+        if ((dx - f1) * (dx - f1) + (dy - 7.5f) * (dy - 7.5f) < 2.6f || (dx - f2) * (dx - f2) + (dy - 7.5f) * (dy - 7.5f) < 2.6f)
+          c = 0xB8AC90, on = true;
+      }
+      // 胴 (座っているときは丸く)
+      float ex = (dx + 0.5f) / (sitting ? 6.5f : 8.5f), ey = (dy - 2) / (sitting ? 6.5f : 5.5f);
+      bool body = ex * ex + ey * ey <= 1;
+      // 頭
+      float hx = dx - (sitting ? 3.5f : 6), hy = dy + (sitting ? 5 : 3);
+      bool head = hx * hx + hy * hy <= 5 * 5;
+      // 三角の耳
+      bool ear = false;
+      for (int k = 0; k < 2; k++)
+      {
+        float ax = hx - (k ? 2.8f : -2.2f), ay = hy + 4.2f;
+        if (ay < 0 && ay > -4.2f && fabsf(ax) < (ay + 4.2f) * 0.55f)
+          ear = true;
+      }
+      if (body || head || ear)
+      {
+        c = mix(0xDCD0B4, 0xA89C80, clampf((dy + 2) / 10, 0, 1));
+        // 三毛のぶち (色あせた茶と黒)
+        float m = sinf(dx * 0.55f + 1.3f) * sinf(dy * 0.7f + 0.4f) + 0.4f * sinf(dx * 1.3f - dy * 0.8f);
+        if (m > 0.55f)
+          c = mix(c, 0xB8743A, 0.8f);
+        else if (m < -0.75f)
+          c = mix(c, 0x3A2E26, 0.85f);
+        if (ear && !head && !body)
+          c = 0x8A6A50;
+        on = true;
+      }
+      if (!on)
+        continue;
+      if (head)
+      {
+        // 目: 金色に細い瞳。満足すると ^ の形
+        for (int k = 0; k < 2; k++)
+        {
+          float ex2 = hx - (k ? 2.6f : -1.0f), ey2 = hy + 0.6f;
+          if (content || hit)
+          {
+            if (fabsf(ey2 + (content ? -0.35f * ex2 * ex2 : 0)) < 0.5f && fabsf(ex2) < 1.3f)
+              c = 0x1A1008;
+          }
+          else if (ex2 * ex2 + ey2 * ey2 < 1.3f * 1.3f)
+            c = fabsf(ex2) < 0.4f ? 0x1A1008 : 0xD8B040;
+        }
+        if ((hx - 4.6f) * (hx - 4.6f) + (hy - 1.4f) * (hy - 1.4f) < 0.8f)
+          c = 0xC06A6A; // 鼻
+      }
+      d2::P(px, py, c);
+    }
+}
+
+// 座敷わらし: おかっぱ頭に赤い着物の女の子。k: 濃さ (現れる・消える)
+static void drawWarashi(float cx, float cy, float k, int t)
+{
+  if (k <= 0)
+    return;
+  int a = (int)(255 * k);
+  cy += sinf(t * 0.08f) * 0.6f;
+  int ry0, ry1;
+  stripRows(cy - 10, cy + 10, ry0, ry1);
+  for (int py = ry0; py <= ry1; py++)
+    for (int px = (int)floorf(cx - 9); px <= (int)ceilf(cx + 9); px++)
+    {
+      float dx = px - cx, dy = py - cy;
+      uint32_t c = 0;
+      bool on = false;
+      // 着物 (座ってすそが広がる)
+      if (dy >= 0 && dy <= 9.5f && fabsf(dx) <= 3.6f + dy * 0.5f)
+      {
+        c = mix(0xB84A40, 0x7A2A26, clampf(dy / 10, 0, 1));
+        if (d2::h2(floorf(dx * 0.6f) + 30, floorf(dy * 0.6f)) > 0.8f)
+          c = 0xE0C8A0; // 小さな花の柄
+        if (dy > 1.6f && dy < 3.2f)
+          c = 0xD0A840; // 帯
+        on = true;
+      }
+      // 顔
+      float fx = dx, fy = dy + 4.6f;
+      if (fx * fx + fy * fy <= 4.2f * 4.2f)
+      {
+        c = 0xEAD8BC;
+        if (fabsf(fy - 0.4f) < 0.7f && fabsf(fabsf(fx) - 1.6f) < 0.6f)
+          c = 0x2A1A10; // 目
+        if (fabsf(fy - 1.8f) < 0.6f && fabsf(fabsf(fx) - 2.8f) < 0.7f)
+          c = mix(c, 0xE07070, 0.6f); // ほお
+        if (fabsf(fy - 2.6f) < 0.45f && fabsf(fx) < 0.6f)
+          c = 0xB04040; // 口
+        on = true;
+      }
+      // おかっぱ: まっすぐな前髪と、横の髪
+      float hx = dx, hy = dy + 5.2f;
+      if (hx * hx + hy * hy <= 5.0f * 5.0f && (hy < -1.6f || (fabsf(hx) > 3.1f && hy < 3.4f)))
+        c = 0x1A1410, on = true;
+      if (fabsf(hx) > 3.1f && fabsf(hx) < 5 && hy >= 0 && hy < 3.4f)
+        c = 0x1A1410, on = true;
+      if (on)
+        d2::P(px, py, c, a);
+    }
+  // きらきら
+  for (int i = 0; i < 3; i++)
+  {
+    float u = (t + i * 23) % 70 / 70.0f, x = cx + sinf(i * 2.3f + t * 0.01f) * 9, y = cy - 6 - u * 16;
+    int al = (int)(k * 200 * sinf(PI_F * u));
+    d2::P(x, y, 0xFFF0B0, al);
+    d2::P(x + 1, y, 0xFFF0B0, al / 2);
+    d2::P(x - 1, y, 0xFFF0B0, al / 2);
+    d2::P(x, y - 1, 0xFFF0B0, al / 2);
+    d2::P(x, y + 1, 0xFFF0B0, al / 2);
+  }
+}
+
+// 化け狸の葉っぱ: 1 の数字を隠して、10 と書いてある
+static void drawLeaf(float cx, float cy, int t)
+{
+  float rot = -0.35f + 0.08f * sinf(t * 0.15f);
+  float cr = cosf(rot), sr = sinf(rot);
+  int ry0, ry1;
+  stripRows(cy - 12, cy + 12, ry0, ry1);
+  for (int py = ry0; py <= ry1; py++)
+    for (int px = (int)floorf(cx - 15); px <= (int)ceilf(cx + 15); px++)
+    {
+      float dx = px - cx, dy = py - cy;
+      float u = (dx * cr + dy * sr) / 14, v = (-dx * sr + dy * cr) / 9.5f;
+      float w = 1 - u * u; // 先がとがった葉の形
+      if (fabsf(v) > w * (1 - 0.25f * u) || fabsf(u) > 1)
+      {
+        // 柄
+        if (u < -1 && u > -1.25f && fabsf(v) < 0.08f)
+          d2::P(px, py, 0x5A4A20);
+        continue;
+      }
+      uint32_t c = mix(0x5A8A34, 0x2E5A20, clampf((v + 1) / 2, 0, 1));
+      if (fabsf(v) < 0.07f || fabsf(fabsf(v) - fabsf(u + 0.2f) * 0.6f) < 0.05f)
+        c = mix(c, 0xA8C070, 0.6f); // 葉脈
+      d2::P(px, py, c);
+    }
+  wornText(cx, cy - 7, "10", 0x6A2410, 2, 255, 2.0f);
+}
+
+// どろんの煙
+static void drawPuff(float cx, float cy, int puffT)
+{
+  float k = 1 - puffT / 14.0f;
+  for (int i = 0; i < 6; i++)
+  {
+    float a = i * 1.047f + k * 0.8f, r = 4 + k * 10;
+    d2::C(cx + cosf(a) * r, cy + sinf(a) * r * 0.7f, 4 + 3 * (1 - k), 0xE8E0D0, (int)(200 * (1 - k)));
+  }
+  d2::C(cx, cy, 7 * (1 - k) + 2, 0xF0E8D8, (int)(220 * (1 - k)));
+}
+
+// 小判: 金色の楕円がくるくる回る
+static void drawCoin(float cx, float cy, int t)
+{
+  float w = fabsf(cosf(t * 0.5f)) * 3.6f + 0.6f, h = 5.2f;
+  int ry0, ry1;
+  stripRows(cy - h - 1, cy + h + 1, ry0, ry1);
+  for (int py = ry0; py <= ry1; py++)
+    for (int px = (int)floorf(cx - w - 1); px <= (int)ceilf(cx + w + 1); px++)
+    {
+      float u = (px - cx) / w, v = (py - cy) / h, d = u * u + v * v;
+      if (d > 1)
+        continue;
+      uint32_t c = mix(0xF0D070, 0xA87820, clampf(u * 0.5f + v * 0.5f + 0.5f, 0, 1));
+      if (d > 0.7f)
+        c = 0x8A6018;
+      if (fabsf(v) < 0.5f && fabsf(fabsf(v) - 0.25f) < 0.12f && w > 2)
+        c = mix(c, 0x8A6018, 0.6f); // 刻み
+      d2::P(px, py, c);
     }
 }
 
@@ -1561,17 +2213,87 @@ void Game7::drawDynamic()
       d2::C(y.x + 2, y.y + 3, YR * sc, 0x000000, 60);
     drawYokai(i, y.x, y.y, sc, y.hitT > 0, i);
   }
+  // 化け狸の葉っぱと、どろんの煙
+  if (bake.hole >= 0)
+  {
+    const Hole &o = HOLES[bake.hole];
+    float ty = o.y > 230 ? o.y - 33 : o.y + 15; // 数字の場所 (台の絵と同じ)
+    drawLeaf(o.x, ty + 8, t);
+  }
+  if (bake.puffT > 0 && bake.puffHole >= 0)
+  {
+    const Hole &o = HOLES[bake.puffHole];
+    drawPuff(o.x, o.y > 230 ? o.y - 25 : o.y + 23, bake.puffT);
+  }
+  // 巣にたまった玉
+  for (int sd = 0; sd < 2; sd++)
+  {
+    int n = std::min(nest[sd].n, NEST_FULL);
+    for (int i = 0; i < n; i++)
+    {
+      float x = sd ? XD - NEST_PILE[i][0] : XL + NEST_PILE[i][0];
+      drawBall(x, NEST_Y + NEST_PILE[i][1], 2.2f, 0.35f);
+    }
+  }
+  // 座敷わらし
+  if (zw.k > 0)
+    drawWarashi(zw.x, zw.y, zw.k, t);
   // 玉どろぼうと、持っている玉
   if (th.st != 0)
   {
     if (th.x > XL + 8 && th.x < XD - 8)
       d2::C(th.x + 2, th.y + 6, 7, 0x000000, 55);
-    drawThief(th.x, th.y, th.face, th.ph, th.st == 2 && th.t > 0, th.hitT > 0);
+    drawThief(th.x, th.y, th.face, th.ph, th.st == 2 && th.t > 0, th.hitT > 0, th.st == 2 && th.trip > 10);
     if (th.st == 2)
     {
       const Ball &o = b[th.ball];
       if (o.x > XL + 2 && o.x < XD - 2)
         drawBall(o.x, o.y, BALL_R * 0.85f, 0.1f);
+    }
+  }
+  // 猫又
+  if (neko.st != 0)
+  {
+    if (neko.x > XL + 10 && neko.x < XD - 10)
+      d2::C(neko.x + 2, neko.y + 7, 8, 0x000000, 55);
+    drawNeko(neko.x, neko.y, neko.face, neko.ph, neko.st == 2, neko.hitT > 0, neko.st == 2);
+  }
+  // 小判
+  if (coin.t > 0)
+    drawCoin(coin.x, coin.y, coin.t);
+  // 百鬼夜行: みんなで右から左へ練り歩く (玉には当たらない)
+  if (paradeT >= 0)
+  {
+    static const int ORDER[8] = {0, 3, 1, 4, 2, 5, 6, 0};
+    float go = PARADE_V * paradeT / FPS;
+    for (int i = 0; i < 8; i++)
+    {
+      float x = XD + 18 + i * PARADE_GAP - go, ph = go * 0.25f + i;
+      if (x < XL - 20 || x > XD + 20)
+        continue;
+      float y = PARADE_Y + (i % 2) * 4 + sinf(ph * 2) * 1.5f;
+      switch (ORDER[i])
+      {
+      case 3:
+        drawThief(x, y, -1, ph * 2, true, false);
+        if (x - 7 > XL + 2 && x - 7 < XD - 2)
+          drawBall(x - 7, y + 3, BALL_R * 0.85f, 0.1f);
+        break;
+      case 4:
+        drawNeko(x, y, -1, ph * 2, false, false, false);
+        break;
+      case 5:
+        if (x > XL + 10 && x < XD - 10)
+          drawWarashi(x, y, 1, t);
+        break;
+      case 6:
+        if (x > XL + 8 && x < XD - 8)
+          drawHoleYokai(x, y + 4, 1, (paradeT / 10) % 2);
+        break;
+      default:
+        drawYokai(ORDER[i], x, y, 1, false, 3);
+        break;
+      }
     }
   }
   // 打ち出す棒とバネ (さびた鉄、木の頭)
@@ -1610,13 +2332,23 @@ void Game7::drawHud(Gfx &g)
   txt(g, 38, 2, CREAM, s, false, 3);
   snprintf(s, sizeof(s), "WIN %d", win);
   txt(g, W - 4 - (int)strlen(s) * 12, 2, BRASS, s, false, 3);
+  if (zw.k > 0.5f && (t / 10) % 4) // 座敷わらしがいるあいだは 2 倍
+    txt(g, 84, 5, REDT, "x2", false, 2);
   // 樋に落ちている持ち玉の絵 (最大 12 個)
   // 払い出しの数が浮かぶ
   for (auto &p : pops)
     if (p.t > 0)
     {
-      snprintf(s, sizeof(s), "+%d", p.v);
-      txt(g, (int)p.x, (int)(p.y - (40 - p.t) * 0.5f), p.v >= 3 ? REDT : CREAM, s, true, p.v >= 3 ? 3 : 1);
+      int py = (int)(p.y - (40 - p.t) * 0.5f);
+      if (p.kind == 1)
+        txt(g, (int)p.x, py, 0x9AC070, "LEAF...", true);
+      else if (p.kind == 2)
+        txt(g, (int)p.x, py, BRASS, "SPILL!", true, 2);
+      else
+      {
+        snprintf(s, sizeof(s), "+%d", p.v);
+        txt(g, (int)p.x, py, p.v >= 3 ? REDT : CREAM, s, true, p.v >= 3 ? 3 : 1);
+      }
     }
 }
 
@@ -1629,6 +2361,11 @@ void Game7::drawOverlay(Gfx &g)
     txt(g, 78, 244, CREAM, VolumeLevel == 0 ? "VOL OFF" : "VOL");
     for (int i = 0; i < 4; i++)
       d2::R(110 + i * 13, 244, 10, 8, i < VolumeLevel ? BRASS : 0x2A3428);
+  }
+  if (paradeT >= 0 && paradeT < 3 * FPS && (mode == Mode::Play || mode == Mode::Attract))
+  {
+    txt(g, 111, 58, REDT, "HYAKKI YAGYO", true, 3);
+    txt(g, 111, 78, CREAM, "NIGHT PARADE OF YOKAI", true);
   }
   if (lockT > 0 && (mode == Mode::Play || mode == Mode::Attract) && (t / 6) % 2)
   {
@@ -1752,11 +2489,12 @@ void Game7::Draw(Gfx &gx)
   uint32_t t0 = micros();
   int ltop = gx.top * 2 / 3;
   int sh = shakeT > 0 ? shakeDir * ((shakeT & 1) ? 2 : 1) : 0; // 揺らしたときは台を左右にずらす
+  int dark = paradeT < 0 ? 0 : std::min(3, std::min(paradeT / 8, (PARADE_N - paradeT) / 8)); // 百鬼夜行の夜
   for (int r = 0; r < LSTRIP; r++)
   {
     int y = ltop + r;
     uint16_t *dst = gx.buf + r * W;
-    const uint16_t *src = bg + y * W;
+    const uint16_t *src = (dark ? bgDark[dark - 1] : bg) + y * W;
     if (y < HUD_H || sh == 0)
       memcpy(dst, src, W * 2);
     else if (sh > 0)

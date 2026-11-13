@@ -1209,6 +1209,88 @@ void makeWaves()
     }
   }
   set(Sfx::Steal, 0.18f);
+  // 猫又: にゃーご (上がって下がる鳴き声。はじめは鼻にかかった n)
+  w = newWave(0.6f);
+  {
+    float ph = 0, L = 0.6f;
+    for (int i = 0; i < tmpN; i++)
+    {
+      breathe(i);
+      float t = (float)i / SR, u = t / L;
+      float f = (430 + 330 * sinf(3.1416f * min(1.0f, u * 1.3f))) * (1 + 0.025f * sinf(t * PI2 * 6));
+      ph += PI2 * f / SR;
+      float open = min(1.0f, t / 0.08f); // n から a へ口が開く
+      float x = tanhf(sinf(ph) * (1 + 3 * open)) * (0.55f + 0.45f * open * sinf(ph * 2.6f));
+      w[i] = x * min(1.0f, t * 60) * powf(max(0.0f, 1 - u), 0.6f);
+    }
+  }
+  set(Sfx::Neko, 0.16f);
+  // 小判: チャリーン (2 回はねる)
+  w = newWave(0.8f);
+  for (int k = 0; k < 2; k++)
+  {
+    float st = k * 0.07f, a = k ? 0.55f : 1;
+    for (int i = (int)(st * SR); i < tmpN; i++)
+    {
+      float u = (float)i / SR - st;
+      w[i] += (sinf(u * PI2 * 2650) + 0.7f * sinf(u * PI2 * 3910) + 0.45f * sinf(u * PI2 * 5320) + 0.3f * sinf(u * PI2 * 7100) * expf(-u * 20)) * expf(-u * 7) * a * min(1.0f, u * 2000) +
+              noise() * expf(-u * 400) * 0.4f * a;
+    }
+  }
+  set(Sfx::Koban, 0.12f);
+  // どろん: 低いどん と、煙がふくらむ音
+  w = newWave(0.5f);
+  {
+    float ph = 0, lp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      float t = (float)i / SR;
+      ph += PI2 * (70 + 90 * expf(-t * 18)) / SR;
+      lp += (noise() - lp) * 0.08f;
+      w[i] = sinf(ph) * expf(-t * 9) * min(1.0f, t * 300) + lp * 2.2f * sinf(3.1416f * min(1.0f, t / 0.45f));
+    }
+  }
+  set(Sfx::Doron, 0.22f);
+  // 百鬼夜行: 太鼓の どん・どん・どどん・かっ と、笛の節 (ぴーひゃら)
+  w = newWave(2.6f);
+  {
+    static const float DON[5] = {0, 0.28f, 0.56f, 0.7f, 0.84f};
+    for (int k = 0; k < 5; k++)
+    {
+      vTaskDelay(1);
+      bool ka = k == 4; // ふちを打つ かっ
+      float ph = 0;
+      for (int i = (int)(DON[k] * SR); i < tmpN && i < (int)((DON[k] + 0.4f) * SR); i++)
+      {
+        float u = (float)i / SR - DON[k];
+        if (ka)
+          w[i] += (sinf(u * PI2 * 1850) * expf(-u * 90) + noise() * expf(-u * 300) * 0.3f) * 0.6f;
+        else
+        {
+          ph += PI2 * (62 + 50 * expf(-u * 30)) / SR;
+          w[i] += (sinf(ph) * expf(-u * 7) + noise() * expf(-u * 120) * 0.25f) * min(1.0f, u * 800);
+        }
+      }
+    }
+    // 笛: 1.0 秒から、ゆれる高い音でぴーひゃら
+    static const float NOTE[8] = {1175, 1319, 1568, 1319, 1175, 1047, 1175, 1175};
+    static const float NL[8] = {0.14f, 0.14f, 0.28f, 0.12f, 0.12f, 0.2f, 0.16f, 0.4f};
+    float st = 1.0f, ph = 0;
+    for (int k = 0; k < 8; k++)
+    {
+      vTaskDelay(1);
+      for (int i = (int)(st * SR); i < tmpN && i < (int)((st + NL[k]) * SR); i++)
+      {
+        float u = (float)i / SR - st;
+        float f = NOTE[k] * (1 + 0.012f * sinf(u * PI2 * 6)) * (k ? 1 : 1 - 0.06f * expf(-u * 40));
+        ph += PI2 * f / SR;
+        float env = min(1.0f, u * 60) * min(1.0f, (NL[k] - u) * 40);
+        w[i] += (sinf(ph) + 0.15f * sinf(ph * 2) + noise() * 0.06f) * env * 0.4f;
+      }
+      st += NL[k];
+    }
+  }
+  set(Sfx::Matsuri, 0.24f);
   free(tmp);
   tmp = nullptr;
 }
@@ -1376,7 +1458,7 @@ void loopSounds(float *mix, bool mute)
 // 作るのに 50 秒ほどかかるので、一度作ったら /sfx.bin に保存し、次からは読むだけにする (1.4MB ほど)。
 // 見出しに版の番号 (CACHE_KEY) を入れておき、音の作り方を変えて番号を上げたら作りなおす
 const char *const CACHE = "/sfx.bin";
-const char CACHE_KEY[40] = "SKYLARK-SFX v11"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
+const char CACHE_KEY[40] = "SKYLARK-SFX v12"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
 
 bool loadCache()
 {

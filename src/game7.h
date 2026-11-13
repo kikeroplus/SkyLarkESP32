@@ -20,6 +20,7 @@ public:
   void Step(const Input &in);
   void Draw(Gfx &g);
   void debugEnd(); // 確かめる用: 持ち玉を 0 にする
+  void debugEvent(char c); // 確かめる用: P = 百鬼夜行、B = 化け狸、W = 座敷わらし、T = 玉どろぼう、K = 猫又、E = 巣を 9 個に
   bool autoPlay = false;
   int statShots = 0, statWin = 0, statStolen = 0; // 確かめる用: 打った数と払い出しの合計 (割合を見る)、玉どろぼうに取られた数
 
@@ -54,6 +55,7 @@ private:
   {
     float x, y;
     int v, t;
+    int kind; // 0 = 数、1 = LEAF (化け穴がはずれ)、2 = SPILL! (巣から玉があふれた)
   };
 
   struct Yokai // 台に出てくる小さな妖怪。玉が当たるとはじく
@@ -75,6 +77,33 @@ private:
     float ph; // 走る足の動き
     int wt;         // 玉を持ってうろうろする残り時間
     float tx, ty;   // うろうろする行き先
+    int trip, tripCool; // 釘につまずいて転んでいる時間 / 次に転べるまで
+    int fearCool;       // ほかの妖怪にびくっとしたあと
+  };
+  struct Neko // 猫又: まれに出てきて玉どろぼうを追いかけ回す
+  {
+    float x, y, vx, vy;
+    int st; // 0 = 隠れている、1 = 追いかけている、2 = 満足して座っている、3 = 帰る
+    int t, face, side, hitT;
+    float ph;
+  };
+  struct Nest // 玉どろぼうの巣 (左右の壁の穴)。盗んだ玉がたまり、10 個であふれて台へ戻る
+  {
+    int n, spill, spillT;
+  };
+  struct Bake // 化け狸: 1 の穴がしばらく 10 に化ける (入ると 10 か、はずれの葉っぱ)
+  {
+    int hole, t, puffT, puffHole;
+  };
+  struct Warashi // 座敷わらし: とてもまれに台の隅に座り、いるあいだ払い出しが 2 倍
+  {
+    float x, y, k;
+    int st, t;
+  };
+  struct Coin // 玉どろぼうが落とした小判
+  {
+    float x, y, vy;
+    int t;
   };
 
   Mode mode = Mode::Attract;
@@ -105,6 +134,13 @@ private:
   int spitT = -1, spitBall = 0; // 10 の穴の妖怪: 顔を出してから数えたフレーム (-1 = 出ていない) と、くわえている玉
   Yokai yk[3]; // 0 = 上の提灯おばけ、1 = 左のから傘おばけ、2 = 右の一つ目小僧
   Thief th;
+  Neko neko;
+  Nest nest[2]; // 0 = 左、1 = 右
+  Bake bake;
+  Warashi zw;
+  Coin coin;
+  int paradeT = -1, nextParade = 100; // 百鬼夜行: 始まってからのフレーム (-1 = なし) と、次に始まる払い出しの合計
+  uint16_t *bgDark[3] = {}; // 百鬼夜行の夜: だんだん暗くした台の絵
 
   uint16_t *bg = nullptr;
 
@@ -121,6 +157,12 @@ private:
   void stepYokai();
   void resetYokai();
   void stepThief();
+  void stepNeko();
+  void stepExtras();
+  void thiefDrop(bool koban, float nx);
+  void pay(float x, float y, int v);
+  void addPop(float x, float y, int v, int kind);
+  float yokaiFear(float x, float y, float &fx, float &fy);
   void collideSeg(Ball &o, float x0, float y0, float x1, float y1, float e, bool gate, float rot = 0);
   int rankOf(int s) const;
   void stepEntry(const Input &in);
