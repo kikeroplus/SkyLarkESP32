@@ -38,6 +38,12 @@ static const float SPIT_P = 0.33f; // 10 の穴に入った玉を、穴の妖怪
 static const int HOP_N = 10;      // 吐いた玉が宙を跳んでいるフレーム (釘を飛び越し、穴にも入らない)
 static const int SPIT_AT = 20, SPIT_END = 36; // 顔を出してから吐くまで、引っこむまでのフレーム
 static const float E_YOKAI = 0.6f, KICK_YOKAI = 110; // はね返り。当たったら少なくともこの速さではじく (上に乗って止まらない)
+// 玉どろぼう: ときどき左右の壁の裏から出てきて、転がっている玉を追いかけ、取ったら壁の裏へ逃げる (その玉はなくなる)。
+// 逃げているところへほかの玉を当てると、取った玉を落とす
+static const float TH_GRAB = 10;    // 玉の中心がこれより近づくと取る
+static const float TH_R = 7;        // 逃げているときの当たりの半径 (ほかの玉が当たると落とす)
+static const float TH_CHASE = 55, TH_RUN = 75, TH_FLEE = 110, TH_WANDER = 45; // 追いかける・玉を持って逃げる・手ぶらで逃げる速さ
+static const float TH_OUT = 16;     // 壁からこれだけ裏へ入ったら消える
 
 // 穴と払い出しの数
 struct Hole
@@ -462,6 +468,137 @@ void Game7::resetYokai()
     Yokai &y = yk[i];
     y = Yokai{0, 0, 0, 0, (int)((1.5f + rnd() * 3) * FPS), 0, rnd() * 6.28f};
   }
+  th = Thief{};
+  th.st = 0;
+  th.t = (int)((8 + rnd() * 8) * FPS);
+  th.face = 1;
+}
+
+// 玉どろぼう: 隠れている (st 0) → 壁の裏から出て玉を追う (1) → 取ったらにやりとし、しばらく持ったままうろうろしてから逃げる (2) / あきらめて帰る (3)
+void Game7::stepThief()
+{
+  Thief &h = th;
+  if (h.hitT > 0)
+    h.hitT--;
+  auto toExit = [&](float v) {
+    float ex = h.exit < 0 ? XL - TH_OUT : XD + TH_OUT;
+    h.vx = h.exit * v;
+    h.vy *= 0.9f;
+    h.face = h.exit;
+    h.x += h.vx / FPS;
+    h.y = clampf(h.y + h.vy / FPS, 100, 292);
+    h.ph += fabsf(h.vx) / FPS * 0.5f;
+    return h.exit < 0 ? h.x <= ex : h.x >= ex;
+  };
+  switch (h.st)
+  {
+  case 0:
+    if (--h.t <= 0)
+    {
+      h.exit = rnd() < 0.5f ? -1 : 1;
+      h.x = h.exit < 0 ? XL - TH_OUT : XD + TH_OUT;
+      h.y = 150 + rnd() * 130;
+      h.vx = h.vy = 0;
+      h.face = -h.exit;
+      h.st = 1;
+      h.t = (int)((6 + rnd() * 4) * FPS);
+    }
+    break;
+  case 1:
+  {
+    // いちばん近い、台の上を転がっている玉を追う (宙を跳んでいる玉と、打ち出すレーンの玉は追わない)
+    int best = -1;
+    float bd = 1e9f;
+    for (int i = 0; i < NB; i++)
+    {
+      const Ball &o = b[i];
+      if (o.st != 1 || o.nocap || o.x > XD - 4 || o.y < 90 || o.y > TRAY_Y)
+        continue;
+      float d = hypotf(o.x - h.x, o.y - h.y);
+      if (d < bd)
+        bd = d, best = i;
+    }
+    float tx = best >= 0 ? b[best].x : 111 + 50 * sinf(h.ph * 0.13f), ty = best >= 0 ? b[best].y : h.y;
+    float dx = tx - h.x, dy = ty - h.y, d = std::max(1.0f, hypotf(dx, dy));
+    float sp = best >= 0 ? TH_CHASE : TH_CHASE * 0.5f;
+    h.vx += (dx / d * sp - h.vx) * 0.25f;
+    h.vy += (dy / d * sp - h.vy) * 0.25f;
+    h.x += h.vx / FPS;
+    h.y = clampf(h.y + h.vy / FPS, 100, 292);
+    // 出てきたら壁の内側にとどまる
+    if (h.x > XL + 9 && h.x < XD - 9)
+      h.x = clampf(h.x, XL + 9, XD - 9);
+    else if (h.exit < 0)
+      h.x = std::min(h.x, XD - 9.0f);
+    else
+      h.x = std::max(h.x, XL + 9.0f);
+    if (fabsf(h.vx) > 4)
+      h.face = h.vx > 0 ? 1 : -1;
+    h.ph += hypotf(h.vx, h.vy) / FPS * 0.5f;
+    if (--h.t <= 0)
+    {
+      h.st = 3; // あきらめて、近いほうの壁へ帰る
+      h.exit = h.x < 111 ? -1 : 1;
+    }
+    break;
+  }
+  case 2:
+  {
+    Ball &o = b[h.ball];
+    if (h.t > 0)
+    {
+      h.t--; // 取った玉を見せびらかして、にやりとする
+      h.vx *= 0.7f;
+      h.vy *= 0.7f;
+    }
+    else if (h.wt > 0)
+    {
+      // 玉を持ったまま、しばらく台の上をうろうろする。ときどき立ち止まってにやり
+      h.wt--;
+      float dx = h.tx - h.x, dy = h.ty - h.y, d = hypotf(dx, dy);
+      if (d < 6)
+      {
+        h.tx = XL + 20 + rnd() * (XD - XL - 40);
+        h.ty = 110 + rnd() * 175;
+        if (rnd() < 0.45f)
+          h.t = 12 + (int)(rnd() * 20);
+      }
+      else
+      {
+        float sp = TH_WANDER * (0.8f + 0.4f * sinf(h.ph * 0.37f)); // 足取りに緩急
+        h.vx += (dx / d * sp - h.vx) * 0.2f;
+        h.vy += (dy / d * sp - h.vy) * 0.2f;
+      }
+      h.x = clampf(h.x + h.vx / FPS, XL + 9, XD - 9);
+      h.y = clampf(h.y + h.vy / FPS, 100, 292);
+      if (fabsf(h.vx) > 4)
+        h.face = h.vx > 0 ? 1 : -1;
+      h.ph += hypotf(h.vx, h.vy) / FPS * 0.5f;
+      if (h.wt == 0)
+        h.exit = h.x < 111 ? -1 : 1; // 飽きたら、近いほうの壁へ
+    }
+    else if (toExit(TH_RUN))
+    {
+      // 壁の裏へ逃げきった: 玉はなくなる
+      o.st = 0;
+      statStolen++;
+      h.st = 0;
+      h.t = (int)((12 + rnd() * 12) * FPS);
+      sfx(Sfx::Yokai6, 0.8f); // けけっ
+      break;
+    }
+    o.x = h.x + h.face * 7;
+    o.y = h.y + 3;
+    break;
+  }
+  default:
+    if (toExit(TH_FLEE))
+    {
+      h.st = 0;
+      h.t = (int)((10 + rnd() * 10) * FPS);
+    }
+    break;
+  }
 }
 
 // 妖怪: 隠れている (st 0) → 出てくる (1) → 出ている (2) → 引っこむ (3) → 隠れている
@@ -678,6 +815,53 @@ void Game7::physics()
           sfx((Sfx)((int)Sfx::Yokai0 + v));
         }
       }
+      // 玉どろぼう: 追いかけているときは触れた玉を取る。逃げているときは、ほかの玉が当たると取った玉を落とす
+      if (th.st == 1 && !o.nocap && o.x < XD - 2)
+      {
+        float dx = o.x - th.x, dy = o.y - th.y;
+        if (dx * dx + dy * dy < TH_GRAB * TH_GRAB)
+        {
+          o.st = 4;
+          th.ball = i;
+          th.st = 2;
+          th.t = 12;
+          th.wt = (int)((6 + rnd() * 5) * FPS); // 取ったあと、しばらくうろうろする
+          th.tx = th.x;
+          th.ty = th.y; // 着いたことにして、すぐ次の行き先を決める
+          th.exit = th.x < 111 ? -1 : 1;
+          th.vy = 0;
+          sfx(Sfx::Steal);
+          continue;
+        }
+      }
+      else if (th.st == 2 && i != th.ball && !o.nocap)
+      {
+        const float RR = TH_R + BALL_R;
+        float dx = o.x - th.x, dy = o.y - th.y, dd = dx * dx + dy * dy;
+        if (dd < RR * RR && dd > 1e-6f)
+        {
+          float d = sqrtf(dd), nx = dx / d, ny = dy / d;
+          o.x = th.x + nx * RR;
+          o.y = th.y + ny * RR;
+          float vn = o.vx * nx + o.vy * ny;
+          if (vn < 0)
+          {
+            o.vx -= (1 + E_YOKAI) * vn * nx;
+            o.vy -= (1 + E_YOKAI) * vn * ny;
+          }
+          // 取った玉を落として、手ぶらで逃げる
+          Ball &c = b[th.ball];
+          c.st = 1;
+          c.x = clampf(th.x + th.face * 7, XL + RB, XD - RB);
+          c.y = th.y;
+          c.vx = -nx * 90 + (rnd() - 0.5f) * 40;
+          c.vy = -70;
+          c.t = 0;
+          th.st = 3;
+          th.hitT = 14;
+          sfx(Sfx::Yokai3); // きゅっ
+        }
+      }
     }
     // 玉どうし
     for (int i = 0; i < NB; i++)
@@ -834,6 +1018,7 @@ void Game7::stepBoard(const Input *in)
   }
   stepPlunger(pull);
   stepYokai();
+  stepThief();
   if (lockT > 0)
     lockT--;
   if (shakeT > 0)
@@ -1140,6 +1325,14 @@ static void panel(int x, int y, int w, int h)
   d2::R(x + w - 1, y, 1, h, 0x6A5A38);
 }
 
+// 描く範囲の行を、いま描いている帯の中だけにする (帯ごとに呼ばれるので、帯の外まで計算すると重い)
+static void stripRows(float top, float bot, int &y0, int &y1)
+{
+  const Surf *s = d2::S;
+  y0 = std::max((int)floorf(top), s->y0 - s->oy);
+  y1 = std::min((int)ceilf(bot), s->y0 + s->h - 1 - s->oy);
+}
+
 // 妖怪を 1 匹描く。色は台に合わせて色あせた絵の具。hit: 当たった直後 (目をつぶってびくっとする)
 // side: 1 = 左の壁から、2 = 右の壁から出ているので、壁より外は描かない
 static void drawYokai(int kind, float cx, float cy, float sc, bool hit, int side)
@@ -1149,7 +1342,9 @@ static void drawYokai(int kind, float cx, float cy, float sc, bool hit, int side
   if (hit)
     cx += (kind == 0 ? 0 : side == 1 ? -1 : 1), cy -= 1;
   float R = 9 * sc;
-  for (int py = (int)floorf(cy - R); py <= (int)ceilf(cy + R); py++)
+  int ry0, ry1;
+  stripRows(cy - R, cy + R, ry0, ry1);
+  for (int py = ry0; py <= ry1; py++)
     for (int px = (int)floorf(cx - R); px <= (int)ceilf(cx + R); px++)
     {
       if ((side == 1 && px <= XL + 1) || (side == 2 && px >= XD - 1))
@@ -1238,7 +1433,9 @@ static void drawHoleYokai(float hx, float hy, float k, bool mouth)
   if (k <= 0)
     return;
   float cy = hy + 7 - 10 * k, r = 6;
-  for (int py = (int)floorf(cy - r); py <= (int)ceilf(cy + r); py++)
+  int ry0, ry1;
+  stripRows(cy - r, cy + r, ry0, ry1);
+  for (int py = ry0; py <= ry1; py++)
     for (int px = (int)floorf(hx - r); px <= (int)ceilf(hx + r); px++)
     {
       float dx = px - hx, dy = py - cy;
@@ -1253,6 +1450,92 @@ static void drawHoleYokai(float hx, float hy, float k, bool mouth)
       if (mouth && dx * dx + (dy - 2.4f) * (dy - 2.4f) < 2.6f)
         c = 0x6A1E1E; // 開けた口
       d2::P(px, py, c);
+    }
+}
+
+// 玉どろぼう: 灰色のねずみの妖怪に、緑の唐草の手ぬぐいでほっかむり (あごの下で結ぶ)。face: 向き、ph: 走る足、grin: にやり、hit: 当たってびくっ
+// 壁の裏にいる所は描かない
+static void drawThief(float cx, float cy, int face, float ph, bool grin, bool hit)
+{
+  float bob = fabsf(sinf(ph)) * -1.2f;
+  cy += bob;
+  if (hit)
+    cy -= 1.5f;
+  int step = sinf(ph) > 0 ? 1 : -1;
+  int ry0, ry1;
+  stripRows(cy - 10, cy + 9, ry0, ry1);
+  for (int py = ry0; py <= ry1; py++)
+    for (int px = (int)floorf(cx - 14); px <= (int)ceilf(cx + 14); px++)
+    {
+      if (px <= XL + 1 || px >= XD - 1)
+        continue;
+      float dx = (px - cx) * face, dy = py - cy;
+      uint32_t c = 0;
+      bool on = false;
+      // しっぽ: 後ろへ細く、くねらせる
+      if (dx < -6 && dx > -14)
+      {
+        float ty = 3 - (dx + 6) * 0.35f + 1.6f * sinf(dx * 0.7f + ph * 1.3f);
+        if (fabsf(dy - ty) < 0.75f)
+          c = 0xA08078, on = true;
+      }
+      // 足 (走るとき前後に入れかわる)
+      float f1 = -3 + step * 1.5f, f2 = 3 - step * 1.5f;
+      if ((dx - f1) * (dx - f1) + (dy - 6.8f) * (dy - 6.8f) < 2.0f || (dx - f2) * (dx - f2) + (dy - 6.8f) * (dy - 6.8f) < 2.0f)
+        c = 0x7A5A52, on = true;
+      // 胴
+      float ex = (dx + 0.5f) / 7, ey = (dy - 2) / 5;
+      if (ex * ex + ey * ey <= 1)
+      {
+        c = mix(0x8E8678, 0x524C44, clampf((dy + 1) / 8, 0, 1));
+        if (dx > 2.5f && dy > 1)
+          c = mix(c, 0xB4AC98, 0.35f); // おなか
+        on = true;
+      }
+      // 頭と鼻先
+      float hx = dx - 4, hy = dy + 2;
+      bool head = hx * hx + hy * hy <= 4.4f * 4.4f;
+      float sx = (dx - 6.6f) / 2.4f, sy = (dy + 0.6f) / 1.8f;
+      if (head || sx * sx + sy * sy <= 1)
+        c = mix(0xA29A8C, 0x6A6458, clampf((dy + 2) / 6, 0, 1)), on = true;
+      // ほっかむり: 頭の上と後ろを包む (顔の前と下は出す)
+      if (hx * hx + hy * hy <= 5.0f * 5.0f && !(dx > 3.2f && dy > -3.6f))
+      {
+        c = 0x2E6644;
+        if (sinf(dx * 2.2f + sinf(dy * 1.8f) * 2.2f) * sinf(dy * 2.4f + dx * 0.6f) > 0.55f)
+          c = 0xD6CCB0; // 唐草の白
+        on = true;
+      }
+      // 結び目: あごの下
+      if ((dx - 2.6f) * (dx - 2.6f) + (dy - 1.6f) * (dy - 1.6f) < 2.4f || (dx > 1 && dx < 2.4f && dy > 2 && dy < 4.2f && fabsf(dx - 1.7f - (dy - 2) * 0.3f) < 0.6f))
+        c = 0x2E6644, on = true;
+      // 耳: 手ぬぐいから突き出す
+      float ax = dx - 2, ay = dy + 6.8f;
+      if (ax * ax + ay * ay < 2.1f * 2.1f)
+        c = ax * ax + ay * ay < 1.1f * 1.1f ? 0xB88888 : 0x8A8276, on = true;
+      if (!on)
+        continue;
+      // 目 (にやりとするときは細める)
+      float edx = dx - 5.3f, edy = dy + 1.9f;
+      if (grin || hit)
+      {
+        if (fabsf(edy + (grin ? 0.2f * edx * edx : 0)) < 0.55f && fabsf(edx) < 1.4f)
+          c = 0x140C08;
+      }
+      else if (edx * edx + edy * edy < 1.15f * 1.15f)
+        c = edx > 0.1f && edy < -0.2f ? 0xE8E0C8 : 0x140C08;
+      // 鼻
+      if ((dx - 8.8f) * (dx - 8.8f) + (dy + 0.9f) * (dy + 0.9f) < 1.0f)
+        c = 0xC06A6A;
+      d2::P(px, py, c);
+    }
+  // ひげ
+  for (int k = -1; k <= 1; k += 2)
+    for (float u = 0; u < 4; u += 0.7f)
+    {
+      float x = cx + face * (8.6f + u), y = cy + 0.2f + k * u * 0.35f;
+      if (x > XL + 1 && x < XD - 1)
+        d2::P(x, y, 0x3A3028, 160);
     }
 }
 
@@ -1277,6 +1560,19 @@ void Game7::drawDynamic()
     if (i == 0) // 左右の妖怪は壁の裏から出てくるので、影は描かない (壁にかかる)
       d2::C(y.x + 2, y.y + 3, YR * sc, 0x000000, 60);
     drawYokai(i, y.x, y.y, sc, y.hitT > 0, i);
+  }
+  // 玉どろぼうと、持っている玉
+  if (th.st != 0)
+  {
+    if (th.x > XL + 8 && th.x < XD - 8)
+      d2::C(th.x + 2, th.y + 6, 7, 0x000000, 55);
+    drawThief(th.x, th.y, th.face, th.ph, th.st == 2 && th.t > 0, th.hitT > 0);
+    if (th.st == 2)
+    {
+      const Ball &o = b[th.ball];
+      if (o.x > XL + 2 && o.x < XD - 2)
+        drawBall(o.x, o.y, BALL_R * 0.85f, 0.1f);
+    }
   }
   // 打ち出す棒とバネ (さびた鉄、木の頭)
   {

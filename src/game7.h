@@ -21,7 +21,7 @@ public:
   void Draw(Gfx &g);
   void debugEnd(); // 確かめる用: 持ち玉を 0 にする
   bool autoPlay = false;
-  int statShots = 0, statWin = 0; // 確かめる用: 打った数と払い出しの合計 (割合を見る)
+  int statShots = 0, statWin = 0, statStolen = 0; // 確かめる用: 打った数と払い出しの合計 (割合を見る)、玉どろぼうに取られた数
 
   Rank Table[5] = {{220, "UME"}, {170, "MAT"}, {130, "TAK"}, {90, "KAM"}, {50, "SAK"}};
   char LastName[4] = "AAA";
@@ -44,7 +44,7 @@ private:
   struct Ball
   {
     float x, y, vx, vy;
-    uint8_t st; // 0 = 無い、1 = 転がっている、2 = 穴に落ちている、3 = 10 の穴の妖怪がくわえている (このあと吐き出す)
+    uint8_t st; // 0 = 無い、1 = 転がっている、2 = 穴に落ちている、3 = 10 の穴の妖怪がくわえている (このあと吐き出す)、4 = 玉どろぼうが持って逃げている
     uint8_t hole;
     int t;    // 落ちている時間 / 止まっている時間
     float rub; // 返しゴムに当たったとき、ゴムを立てる向きへ傾ける角度 (玉ごとにでたらめ)
@@ -61,6 +61,20 @@ private:
     float x, y, k; // k: 0 = 隠れている、1 = 出ている
     int st, t, hitT;
     float ph;
+  };
+
+  struct Thief // 玉どろぼう (唐草のほっかむりをしたねずみの妖怪)。転がっている玉を追いかけて取り、壁の裏へ逃げる
+  {
+    float x, y, vx, vy;
+    int st;   // 0 = 隠れている、1 = 玉を追いかけている、2 = 玉を持って逃げている、3 = 手ぶらで帰る
+    int t;    // 隠れている時間 / 追いかける残り時間 / 取ってからにやりとする時間
+    int face; // 1 = 右を向いている、-1 = 左
+    int exit; // 逃げこむ壁: -1 = 左、1 = 右
+    int ball; // 持っている玉
+    int hitT;
+    float ph; // 走る足の動き
+    int wt;         // 玉を持ってうろうろする残り時間
+    float tx, ty;   // うろうろする行き先
   };
 
   Mode mode = Mode::Attract;
@@ -90,6 +104,7 @@ private:
   int lastYkSnd = -1;
   int spitT = -1, spitBall = 0; // 10 の穴の妖怪: 顔を出してから数えたフレーム (-1 = 出ていない) と、くわえている玉
   Yokai yk[3]; // 0 = 上の提灯おばけ、1 = 左のから傘おばけ、2 = 右の一つ目小僧
+  Thief th;
 
   uint16_t *bg = nullptr;
 
@@ -105,6 +120,7 @@ private:
   void physics();
   void stepYokai();
   void resetYokai();
+  void stepThief();
   void collideSeg(Ball &o, float x0, float y0, float x1, float y1, float e, bool gate, float rot = 0);
   int rankOf(int s) const;
   void stepEntry(const Input &in);

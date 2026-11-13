@@ -108,6 +108,7 @@ enum class Sfx
   Yokai8, // ちりん
   Yokai9, // ぷぅ
   Spit,   // 10 の穴の妖怪が玉を吐く: ぺっ、ひゅん
+  Steal,  // 玉どろぼうが玉を取る: チュチュッ、さささっ
   Count
 };
 

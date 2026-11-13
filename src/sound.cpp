@@ -1182,6 +1182,33 @@ void makeWaves()
     }
   }
   set(Sfx::Spit, 0.22f);
+  // 玉どろぼうが玉を取る: ねずみのチュチュッと、走りだす小さな足音
+  w = newWave(0.55f);
+  {
+    float ph = 0, lp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      float t = (float)i / SR, x = 0;
+      for (int k = 0; k < 2; k++)
+      {
+        float u = t - k * 0.085f;
+        if (u > 0 && u < 0.06f)
+        {
+          float f = 3000 + 1400 * sinf(3.1416f * u / 0.06f) + k * 300;
+          ph += PI2 * f / SR;
+          x += tanhf(sinf(ph) * 1.6f) * sinf(3.1416f * u / 0.06f) * 0.8f;
+        }
+      }
+      if (t > 0.2f)
+      {
+        float u = fmodf(t - 0.2f, 0.038f);
+        lp += (noise() - lp) * 0.35f;
+        x += lp * expf(-u * 260) * 1.4f * (1 - (t - 0.2f) / 0.35f);
+      }
+      w[i] = x * min(1.0f, t * 400);
+    }
+  }
+  set(Sfx::Steal, 0.18f);
   free(tmp);
   tmp = nullptr;
 }
@@ -1349,7 +1376,7 @@ void loopSounds(float *mix, bool mute)
 // 作るのに 50 秒ほどかかるので、一度作ったら /sfx.bin に保存し、次からは読むだけにする (1.4MB ほど)。
 // 見出しに版の番号 (CACHE_KEY) を入れておき、音の作り方を変えて番号を上げたら作りなおす
 const char *const CACHE = "/sfx.bin";
-const char CACHE_KEY[40] = "SKYLARK-SFX v10"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
+const char CACHE_KEY[40] = "SKYLARK-SFX v11"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
 
 bool loadCache()
 {
