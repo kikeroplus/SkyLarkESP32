@@ -1291,6 +1291,65 @@ void makeWaves()
     }
   }
   set(Sfx::Matsuri, 0.24f);
+  // 提灯おばけが飲みこむ: ご (下がる低い音) っくん (のどの奥のこもった音)
+  w = newWave(0.45f);
+  {
+    float ph = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      float t = (float)i / SR, x = 0;
+      if (t < 0.12f)
+      {
+        ph += PI2 * (260 - 900 * t) / SR;
+        x = tanhf(sinf(ph) * 2.5f) * sinf(3.1416f * t / 0.12f) * 0.8f;
+      }
+      float u = t - 0.2f;
+      if (u > 0)
+        x += (sinf(u * PI2 * (95 + 120 * expf(-u * 40))) + 0.3f * sinf(u * PI2 * 310)) * expf(-u * 22) * min(1.0f, u * 600);
+      w[i] = x;
+    }
+  }
+  set(Sfx::Gulp, 0.24f);
+  // 蹴鞠: 革の鞠を蹴る ぽーん (中が空の、やわらかい音)
+  w = newWave(0.35f);
+  for (int i = 0; i < tmpN; i++)
+  {
+    float t = (float)i / SR;
+    float f = 330 * (1 + 0.25f * expf(-t * 60));
+    w[i] = (sinf(t * PI2 * f) + 0.5f * sinf(t * PI2 * f * 2.02f) * expf(-t * 25) + 0.25f * sinf(t * PI2 * f * 3.1f) * expf(-t * 40)) * expf(-t * 13) * min(1.0f, t * 1500) +
+           noise() * expf(-t * 500) * 0.5f;
+  }
+  set(Sfx::Kemari, 0.2f);
+  // おばけホール: ひゅ〜 (ゆれながら上がって下がる笛のような声) と、低い どろどろ
+  w = newWave(1.5f);
+  {
+    float ph = 0, ph2 = 0, lp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      breathe(i);
+      float t = (float)i / SR, u = t / 1.5f;
+      float f = (520 + 380 * sinf(3.1416f * min(1.0f, u * 1.4f))) * (1 + 0.04f * sinf(t * PI2 * 5.5f));
+      ph += PI2 * f / SR;
+      ph2 += PI2 * (55 + 8 * sinf(t * PI2 * 7)) / SR;
+      lp += (noise() - lp) * 0.05f;
+      float env = min(1.0f, t * 4) * powf(max(0.0f, 1 - u), 0.7f);
+      w[i] = (sinf(ph) * 0.45f + (sinf(ph2) * 0.6f + lp * 1.5f) * (0.5f + 0.5f * sinf(t * PI2 * 9))) * env;
+    }
+  }
+  set(Sfx::Obake, 0.2f);
+  // おばけホールに吸いこまれる: ずずっ (下がっていくうなりと、すする音)
+  w = newWave(0.5f);
+  {
+    float ph = 0, lp = 0;
+    for (int i = 0; i < tmpN; i++)
+    {
+      float t = (float)i / SR, u = t / 0.5f;
+      ph += PI2 * (420 * (1 - 0.7f * u)) / SR;
+      lp += (noise() - lp) * (0.5f - 0.4f * u);
+      w[i] = (sinf(ph) * 0.5f + lp * 1.6f) * sinf(3.1416f * u) * (0.7f + 0.3f * sinf(t * PI2 * 30));
+    }
+  }
+  set(Sfx::Suck, 0.22f);
   free(tmp);
   tmp = nullptr;
 }
@@ -1458,7 +1517,7 @@ void loopSounds(float *mix, bool mute)
 // 作るのに 50 秒ほどかかるので、一度作ったら /sfx.bin に保存し、次からは読むだけにする (1.4MB ほど)。
 // 見出しに版の番号 (CACHE_KEY) を入れておき、音の作り方を変えて番号を上げたら作りなおす
 const char *const CACHE = "/sfx.bin";
-const char CACHE_KEY[40] = "SKYLARK-SFX v12"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
+const char CACHE_KEY[40] = "SKYLARK-SFX v13"; // 鳴らしきりの音の作り方を変えたら、番号を上げる (作りなおす)
 
 bool loadCache()
 {

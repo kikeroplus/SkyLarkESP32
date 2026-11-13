@@ -56,6 +56,17 @@ static const int BAKE_N = 9 * 30;   // 化け狸の穴が 10 に化けている�
 static const float BAKE_WIN = 0.5f; // 化けた穴に入ったとき、本当に 10 出る割合 (ほかは葉っぱ)
 static const int PARADE_EVERY = 100, PARADE_N = 14 * 30; // 百鬼夜行: 払い出しの合計がこの数を越えるたびに、この長さ
 static const float PARADE_Y = 140, PARADE_GAP = 30, PARADE_V = 32;
+// 提灯おばけ: 当たった玉を、だいたい 2 回に 1 回飲みこむ (玉はなくなる)
+static const float GULP_P = 0.5f;
+static const int GULP_IN = 10, GULP_N = 42; // 口へ吸いこむまでと、ふくらんで光り終わるまでのフレーム
+// おばけホール: 開いているあいだ、GH_R より近い玉を吸い寄せ、GH_CAP より近づいたら飲みこむ
+static const float GH_R = 54, GH_PULL = 950, GH_CAP = 5;
+static const int GH_FALL = 12;
+// 蹴鞠: 小鬼の輪の大きさと、蹴った玉が飛ぶ速さ
+static const float KM_RX = 25, KM_RY = 19, KM_R = 7;
+// おばけホールが開ける所 (起動のときに、釘と穴から離れた所を探しておく)
+static float GHX[80], GHY[80];
+static int nGH = 0;
 
 // 穴と払い出しの数
 struct Hole
@@ -463,6 +474,29 @@ bool Game7::begin()
   seed = esp_random() | 1;
   buildWalls();
   buildNails();
+  // おばけホールを開ける所: 釘から 15、穴から 28、壁から 22 以上離れた所 (玉が真ん中まで吸い寄せられる)
+  nGH = 0;
+  for (int y = 112; y <= 268 && nGH < 80; y += 6)
+    for (int x = 30; x <= 192 && nGH < 80; x += 6)
+    {
+      bool ok = region(x, y) == 0;
+      for (int k = 0; k < nN && ok; k++)
+        if (hypotf(x - NX[k], y - NY[k]) < 15)
+          ok = false;
+      for (int h = 0; h < NH && ok; h++)
+        if (hypotf(x - HOLES[h].x, y - HOLES[h].y) < 28)
+          ok = false;
+      for (int i = 0; i < nW && ok; i++)
+        if (segDist(x, y, walls[i].x0, walls[i].y0, walls[i].x1, walls[i].y1) < 22)
+          ok = false;
+      if (ok)
+      {
+        GHX[nGH] = x;
+        GHY[nGH] = y;
+        nGH++;
+      }
+    }
+  Serial.printf("game7 ghost hole spots %d\n", nGH);
   bg = (uint16_t *)ps_malloc(W * H * 2);
   if (!bg)
     return false;
@@ -521,6 +555,11 @@ void Game7::resetYokai()
   coin.t = 0;
   paradeT = -1;
   nextParade = PARADE_EVERY;
+  gh = Ghost{};
+  gh.t = (int)((20 + rnd() * 15) * FPS);
+  km = Kemari{};
+  km.t = (int)((18 + rnd() * 20) * FPS);
+  gulpT = 0;
 }
 
 // 近くに出ているほかの妖怪から離れる向き (fx, fy) と、怖さ (0〜1)
@@ -973,6 +1012,252 @@ void Game7::stepExtras()
   }
   if (paradeT >= 0 && ++paradeT > PARADE_N)
     paradeT = -1;
+  // 提灯おばけが玉を飲みこむ: 玉を口へ吸いこみ、ごくん。そのあと少しふくらんで、中がぽっと光る
+  if (gulpT > 0)
+  {
+    Ball &o = b[gulpBall];
+    const Yokai &y = yk[0];
+    if (gulpT < GULP_IN && o.st == 5)
+    {
+      o.x += (y.x + 1 - o.x) * 0.35f;
+      o.y += (y.y + 4 - o.y) * 0.35f;
+    }
+    else if (gulpT == GULP_IN && o.st == 5)
+    {
+      o.st = 0;
+      statGulp++;
+      sfx(Sfx::Gulp);
+      addPop(y.x, y.y + 12, 0, 3);
+    }
+    if (++gulpT > GULP_N)
+      gulpT = 0;
+  }
+  stepGhost();
+  stepKemari();
+}
+
+// おばけホール: 閉じている (st 0) → 開く (1) → 開いている (2) → 閉じる (3)。吸い寄せるのは physics() で
+void Game7::stepGhost()
+{
+  Ghost &g = gh;
+  switch (g.st)
+  {
+  case 0:
+    if (--g.t <= 0)
+    {
+      if (nGH == 0 || paradeT >= 0)
+      {
+        g.t = 3 * FPS;
+        break;
+      }
+      int i = 0;
+      for (int tries = 0; tries < 8; tries++) // 蹴鞠の輪とはかさならない所
+      {
+        i = (int)(rnd() * nGH) % nGH;
+        if (km.st == 0 || hypotf(GHX[i] - km.cx, GHY[i] - km.cy) > 60)
+          break;
+      }
+      g.x = GHX[i];
+      g.y = GHY[i];
+      g.k = 0;
+      g.st = 1;
+      sfx(Sfx::Obake);
+    }
+    break;
+  case 1:
+    g.k = std::min(1.0f, g.k + 1.0f / (0.8f * FPS));
+    if (g.k >= 1)
+    {
+      g.st = 2;
+      g.t = (int)((8 + rnd() * 3) * FPS);
+    }
+    break;
+  case 2:
+    if (--g.t <= 0)
+      g.st = 3;
+    break;
+  default:
+    g.k = std::max(0.0f, g.k - 1.0f / (0.6f * FPS));
+    if (g.k <= 0)
+    {
+      g.st = 0;
+      g.t = (int)((25 + rnd() * 25) * FPS);
+    }
+    break;
+  }
+  // 吸いこまれていく玉: うずを巻いて小さくなり、消える
+  for (int i = 0; i < NB; i++)
+    if (b[i].st == 7 && ++b[i].t >= GH_FALL)
+    {
+      b[i].st = 0;
+      statSuck++;
+    }
+}
+
+// 蹴鞠: 小鬼 from が蹴った玉を、to の足もと (to = -1 なら輪の真ん中) へ、高さ hop で n フレームかけて飛ばす
+void Game7::kemariKick(int from, int to, float hop, int n)
+{
+  Kemari &m = km;
+  const Ball &o = b[m.ball];
+  m.fx = o.x;
+  m.fy = o.y;
+  m.holder = to;
+  if (to >= 0)
+  {
+    m.tx = m.hx[to] + (m.cx - m.hx[to]) * 0.25f;
+    m.ty = m.hy[to] + 5;
+  }
+  else
+  {
+    m.tx = m.cx;
+    m.ty = m.cy;
+  }
+  m.hop = hop;
+  m.fly = 0;
+  m.flyN = n;
+  if (from >= 0)
+  {
+    m.kickT[from] = 7;
+    sfx(Sfx::Kemari, 0.6f + hop / 60);
+  }
+}
+
+// 蹴鞠: いない (st 0) → どろんと出てくる (1) → 蹴りあう (2) → 最後に真ん中へ高く蹴る (3) → 玉を置いて、ばらばらに帰る (4)
+void Game7::stepKemari()
+{
+  Kemari &m = km;
+  m.ph += 1;
+  for (int k = 0; k < 3; k++)
+  {
+    if (m.kickT[k] > 0)
+      m.kickT[k]--;
+    if (m.hitT[k] > 0)
+      m.hitT[k]--;
+  }
+  if (m.st == 0)
+  {
+    if (--m.t > 0)
+      return;
+    // 台の真ん中あたりを転がっている玉を探す
+    int best = -1;
+    for (int i = 0; i < NB; i++)
+    {
+      const Ball &o = b[i];
+      if (o.st == 1 && !o.nocap && o.x > XL + 24 && o.x < XD - 24 && o.y > 120 && o.y < 270)
+      {
+        best = i;
+        break;
+      }
+    }
+    if (best < 0 || paradeT >= 0 || (th.st == 2 && th.ball == best))
+    {
+      m.t = FPS;
+      return;
+    }
+    Ball &o = b[best];
+    m.ball = best;
+    m.cx = clampf(o.x, XL + 36, XD - 36);
+    m.cy = clampf(o.y, 128, 266);
+    static const float AX[3] = {-1, 1, 0}, AY[3] = {-0.55f, -0.55f, 1};
+    for (int k = 0; k < 3; k++)
+    {
+      m.hx[k] = m.x[k] = m.cx + AX[k] * KM_RX;
+      m.hy[k] = m.y[k] = m.cy + AY[k] * KM_RY;
+      m.face[k] = k == 2 ? (rnd() < 0.5f ? -1 : 1) : -(int)AX[k];
+      m.kickT[k] = m.hitT[k] = 0;
+    }
+    o.st = 6;
+    o.vx = o.vy = 0;
+    m.st = 1;
+    m.t = 0;
+    m.fly = m.flyN = 0;
+    m.holder = -1;
+    m.hop = 0;
+    m.kicks = 7 + (int)(rnd() * 6);
+    statKemari++;
+    sfx(Sfx::Doron, 0.7f);
+    addPop(m.cx, m.cy - 34, 0, 5);
+    return;
+  }
+  Ball &o = b[m.ball];
+  m.t++;
+  // 小鬼: 持ち場のまわりで小さく跳ね、玉のほうを向く (帰るときは外へ歩く)
+  for (int k = 0; k < 3; k++)
+  {
+    if (m.st == 4)
+    {
+      float dx = m.hx[k] - m.cx, dy = m.hy[k] - m.cy, d = std::max(1.0f, hypotf(dx, dy));
+      m.x[k] += dx / d * 40 / FPS;
+      m.y[k] += dy / d * 40 / FPS;
+      if (fabsf(dx) > 2)
+        m.face[k] = dx > 0 ? 1 : -1;
+      continue;
+    }
+    m.x[k] += (m.hx[k] + 2 * sinf(m.ph * 0.09f + k * 2) - m.x[k]) * 0.2f;
+    m.y[k] += (m.hy[k] - m.y[k]) * 0.2f;
+    float bx = m.fly < m.flyN ? m.tx : o.x;
+    if (fabsf(bx - m.x[k]) > 3)
+      m.face[k] = bx > m.x[k] ? 1 : -1;
+  }
+  switch (m.st)
+  {
+  case 1:
+    // 出てくるあいだ、玉はその場でとまる。出そろったら、いちばん近い小鬼へ放る
+    if (m.t >= 16)
+    {
+      int near = 0;
+      for (int k = 1; k < 3; k++)
+        if (hypotf(m.hx[k] - o.x, m.hy[k] - o.y) < hypotf(m.hx[near] - o.x, m.hy[near] - o.y))
+          near = k;
+      m.st = 2;
+      kemariKick(-1, near, 12, 14);
+    }
+    break;
+  case 2:
+  case 3:
+    if (m.fly < m.flyN)
+    {
+      float u = (float)++m.fly / m.flyN;
+      o.x = m.fx + (m.tx - m.fx) * u;
+      o.y = m.fy + (m.ty - m.fy) * u;
+      break;
+    }
+    if (m.st == 3)
+    {
+      // 真ん中に落ちた: 小鬼は飽きて帰り、玉はそのまま台に残る
+      o.st = 1;
+      o.vx = (rnd() - 0.5f) * 50;
+      o.vy = -30;
+      o.t = 0;
+      o.nocap = 0;
+      sfx(Sfx::BallClick, 0.5f);
+      m.st = 4;
+      m.t = 0;
+      break;
+    }
+    {
+      int h = m.holder;
+      if (m.kicks-- <= 0)
+      {
+        m.st = 3;
+        kemariKick(h, -1, 30, 26); // 高く蹴り上げて、真ん中へ
+      }
+      else if (rnd() < 0.35f)
+        kemariKick(h, h, 10, 12); // 自分でもう一度蹴り上げる (鞠を落とさない)
+      else
+        kemariKick(h, (h + 1 + (int)(rnd() * 2)) % 3, 16 + rnd() * 8, 18 + (int)(rnd() * 4));
+    }
+    break;
+  default:
+    if (m.t == 22)
+      sfx(Sfx::Doron, 0.5f);
+    if (m.t > 36)
+    {
+      m.st = 0;
+      m.t = (int)((35 + rnd() * 30) * FPS);
+    }
+    break;
+  }
 }
 
 // 妖怪: 隠れている (st 0) → 出てくる (1) → 出ている (2) → 引っこむ (3) → 隠れている
@@ -988,6 +1273,8 @@ void Game7::stepYokai()
       if (y.st == 2 && y.t < 30)
         y.t = 30;
     }
+    if (i == 0 && gulpT > 0 && y.st == 2 && y.t < 15) // 飲みこんでいるあいだは引っこまない
+      y.t = 15;
     switch (y.st)
     {
     case 0:
@@ -1068,6 +1355,12 @@ void Game7::debugEvent(char c)
     neko.t = 1;
   else if (c == 'E')
     nest[0].n = nest[1].n = NEST_FULL - 1;
+  else if (c == 'G' && gh.st == 0)
+    gh.t = 1;
+  else if (c == 'L' && yk[0].st == 0)
+    yk[0].t = 1;
+  else if (c == 'M' && km.st == 0)
+    km.t = 1;
 }
 
 bool Game7::laneBusy() const
@@ -1140,6 +1433,32 @@ void Game7::physics()
       }
       o.x += o.vx * dt;
       o.y += o.vy * dt;
+      // おばけホール: 近い玉を、うずを巻くように吸い寄せる。真ん中まで来たら飲みこむ
+      if (gh.k > 0.3f && !o.nocap && o.x < XD)
+      {
+        float dx = gh.x - o.x, dy = gh.y - o.y, dd = dx * dx + dy * dy;
+        if (dd < GH_R * GH_R)
+        {
+          float d = sqrtf(dd);
+          if (d < GH_CAP)
+          {
+            o.st = 7;
+            o.t = 0;
+            sfx(Sfx::Suck);
+            addPop(gh.x, gh.y - 26, 0, 4);
+            continue;
+          }
+          float nx = dx / d, ny = dy / d, a = gh.k * GH_PULL * (1 - d / GH_R);
+          o.vx += (nx - ny * 0.35f) * a * dt;
+          o.vy += (ny + nx * 0.35f) * a * dt;
+          if (d < 22) // 真ん中の近くでは勢いをそいで、まわり続けないように
+          {
+            float dmp = 1 - 5 * dt * (1 - d / 22);
+            o.vx *= dmp;
+            o.vy *= dmp;
+          }
+        }
+      }
       for (int k = 0; k < nW; k++)
         collideSeg(o, walls[k].x0, walls[k].y0, walls[k].x1, walls[k].y1, walls[k].e, walls[k].gate, k == nW - 1 ? o.rub : 0);
       // 打ち出す棒
@@ -1207,6 +1526,16 @@ void Game7::physics()
         if (y.hitT < 4)
         {
           y.hitT = 12;
+          if (k == 0 && gulpT == 0 && y.st != 3 && rnd() < GULP_P)
+          {
+            // 提灯おばけが、ぱくっと飲みこむ
+            o.st = 5;
+            o.vx = o.vy = 0;
+            gulpT = 1;
+            gulpBall = i;
+            sfx(Sfx::Yokai3, 0.6f); // きゅっ
+            break;
+          }
           // 10 種類の声からでたらめに。続けて同じ声にはしない
           int v = (int)(rnd() * 10) % 10;
           if (v == lastYkSnd)
@@ -1215,6 +1544,37 @@ void Game7::physics()
           sfx((Sfx)((int)Sfx::Yokai0 + v));
         }
       }
+      if (o.st != 1)
+        continue;
+      // 蹴鞠の小鬼: 当たるとはじく
+      if (km.st != 0 && !(km.st == 4 && km.t > 22))
+        for (int k = 0; k < 3; k++)
+        {
+          const float RR = KM_R + BALL_R;
+          float dx = o.x - km.x[k], dy = o.y - km.y[k], dd = dx * dx + dy * dy;
+          if (dd >= RR * RR || dd < 1e-6f)
+            continue;
+          float d = sqrtf(dd), nx = dx / d, ny = dy / d;
+          o.x = km.x[k] + nx * RR;
+          o.y = km.y[k] + ny * RR;
+          float vn = o.vx * nx + o.vy * ny;
+          if (vn < 0)
+          {
+            o.vx -= (1 + E_YOKAI) * vn * nx;
+            o.vy -= (1 + E_YOKAI) * vn * ny;
+          }
+          vn = o.vx * nx + o.vy * ny;
+          if (vn < KICK_YOKAI)
+          {
+            o.vx += (KICK_YOKAI - vn) * nx;
+            o.vy += (KICK_YOKAI - vn) * ny;
+          }
+          if (km.hitT[k] < 4)
+          {
+            km.hitT[k] = 12;
+            sfx(Sfx::Yokai4, 0.6f); // ぽん
+          }
+        }
       // 玉どろぼう: 追いかけているときは触れた玉を取る。逃げているときは、ほかの玉が当たると取った玉を落とす
       if (th.st == 1 && !o.nocap && o.x < XD - 2)
       {
@@ -2191,8 +2551,138 @@ static void drawCoin(float cx, float cy, int t)
     }
 }
 
+// おばけホール: 紫のうずの真ん中に、ふちのゆらめく黒い穴。中から黄色い目がのぞき、まわりを人魂が回る。k: 開いている量
+static void drawGhostHole(float cx, float cy, float k, int t)
+{
+  if (k <= 0)
+    return;
+  float R = 26 * k;
+  int ry0, ry1;
+  stripRows(cy - R, cy + R, ry0, ry1);
+  bool blink = (t % 80) < 5;
+  const float TP = 2 * PI_F, p1 = fmodf(t * 0.3f, TP), p2 = fmodf(t * 0.22f, TP); // sinf に大きな数を渡すと遅いので、0〜2π にしておく
+  for (int py = ry0; py <= ry1; py++)
+    for (int px = (int)floorf(cx - R); px <= (int)ceilf(cx + R); px++)
+    {
+      float dx = px - cx, dy = py - cy, d = sqrtf(dx * dx + dy * dy);
+      if (d > R)
+        continue;
+      float a = atan2f(dy, dx);
+      float hr = 8.5f * k + 1.1f * sinf(a * 5 + p1); // ゆらめくふち
+      if (d < hr)
+      {
+        uint32_t c = mix(0x040208, 0x3A1A52, (d / hr) * (d / hr));
+        // 目: 穴の奥からのぞく (ときどきまばたき)
+        for (int e = -1; e <= 1; e += 2)
+        {
+          float ex = (dx - e * 2.6f * k) / (1.2f * k), ey = (dy + 1.2f * k) / ((blink ? 0.3f : 1.7f) * k);
+          if (ex * ex + ey * ey < 1)
+            c = 0xE0D86A;
+        }
+        d2::P(px, py, c);
+      }
+      else if (d < hr + 1.8f)
+        d2::P(px, py, 0xA078C8, (int)(210 * k)); // 光るふち
+      else
+      {
+        float s = sinf(a * 3 - d * 0.32f + p2); // まわりのうず
+        if (s > 0.5f)
+          d2::P(px, py, 0x6A3A94, (int)((s - 0.5f) * 2 * 120 * k * (1 - d / R)));
+      }
+    }
+  // 人魂: 青白い火が 3 つ、尾を引いて回る
+  for (int j = 0; j < 3; j++)
+    for (int m = 4; m >= 0; m--)
+    {
+      float an = fmodf(t * 0.08f, TP) + j * 2.094f - m * 0.12f, r = 18 * k;
+      float x = cx + cosf(an) * r, y = cy + sinf(an) * r * 0.8f;
+      d2::C(x, y, (2.4f - m * 0.35f) * k, m ? 0x7AA8E0 : 0xD8ECFF, (int)((m ? 150 - m * 25 : 230) * k));
+    }
+}
+
+// 蹴鞠の小鬼: 烏帽子をかぶり、角が 2 本、虎の皮の腰巻き。col: 体の色、kick: 足を蹴り上げている、hit: 当たってびくっ
+static void drawOni(float cx, float cy, uint32_t col, int face, bool kick, bool hit, float ph)
+{
+  cy += kick ? -1.5f : fabsf(sinf(ph * 0.2f)) * -1.0f;
+  if (hit)
+    cy -= 1.5f;
+  int ry0, ry1;
+  stripRows(cy - 13, cy + 9, ry0, ry1);
+  for (int py = ry0; py <= ry1; py++)
+    for (int px = (int)floorf(cx - 9); px <= (int)ceilf(cx + 9); px++)
+    {
+      if (px <= XL + 1 || px >= XD - 1)
+        continue;
+      float dx = (px - cx) * face, dy = py - cy;
+      uint32_t c = 0;
+      bool on = false;
+      // 足: 蹴るときは前の足を前へ振り上げる
+      if (fabsf(dx + 2) < 1.1f && dy > 3.5f && dy < 8)
+        c = scale(col, 0.7f), on = true;
+      if (kick)
+      {
+        if (segDist(dx, dy, 1.5f, 4.5f, 6.5f, 2.5f) < 1.2f)
+          c = scale(col, 0.7f), on = true;
+      }
+      else if (fabsf(dx - 2) < 1.1f && dy > 3.5f && dy < 8)
+        c = scale(col, 0.7f), on = true;
+      // 腰巻き: 黄色に黒い縞
+      float wx = dx / 4.6f, wy = (dy - 3) / 2.4f;
+      if (wx * wx + wy * wy <= 1)
+      {
+        c = sinf(dx * 2.3f + dy * 0.8f) > 0.45f ? 0x2A2018 : 0xC8A040;
+        on = true;
+      }
+      // 頭 (体も兼ねる)
+      float hx = dx, hy = dy + 2;
+      if (hx * hx + hy * hy <= 5.2f * 5.2f && dy < 1.8f)
+      {
+        c = mix(col, scale(col, 0.6f), clampf((dy + 6) / 10, 0, 1));
+        on = true;
+      }
+      // 角: 烏帽子の両わきから
+      for (int e = -1; e <= 1; e += 2)
+      {
+        float ax = dx - e * 3.6f, ay = dy + 7;
+        if (ay < 0 && ay > -3.6f && fabsf(ax - e * ay * 0.25f) < (ay + 3.6f) * 0.32f)
+          c = 0xE8DCC0, on = true;
+      }
+      // 烏帽子: 頭の上に黒い帽子 (少し後ろへ傾く)
+      if (dy < -5.5f && dy > -12.5f && fabsf(dx + (dy + 6) * 0.25f) < 2.4f - (dy < -10.5f ? 0.8f : 0))
+        c = mix(0x1A1814, 0x3A3630, clampf(dx * 0.2f + 0.5f, 0, 1)), on = true;
+      if (!on)
+        continue;
+      // 目と口 (当たると目をつぶる)
+      for (int e = 0; e < 2; e++)
+      {
+        float ex = dx - (e ? 3.6f : 0.9f), ey = dy + 2.6f;
+        if (hit)
+        {
+          if (fabsf(ey) < 0.5f && fabsf(ex) < 1.0f)
+            c = 0x1A1008;
+        }
+        else if (ex * ex + ey * ey < 1.1f)
+          c = ex > 0.2f && ey < -0.2f ? 0xF0E8D0 : 0x1A1008;
+      }
+      if (dy > -0.4f && dy < 0.8f && dx > 1.2f && dx < 4.2f && hx * hx + hy * hy <= 5.2f * 5.2f)
+        c = fabsf(dx - 3.4f) < 0.5f && dy < 0.4f ? 0xF0E8D0 : 0x4A1A12; // 口ときば
+      d2::P(px, py, c);
+    }
+}
+
 void Game7::drawDynamic()
 {
+  // おばけホール (玉より下)
+  if (gh.k > 0)
+    drawGhostHole(gh.x, gh.y, gh.k, t);
+  for (int i = 0; i < NB; i++)
+    if (b[i].st == 7)
+    {
+      // うずを巻いて吸いこまれる玉
+      float u = b[i].t / (float)GH_FALL, dx = b[i].x - gh.x, dy = b[i].y - gh.y, an = u * 4, sc = 1 - u;
+      float x = gh.x + (dx * cosf(an) - dy * sinf(an)) * sc, y = gh.y + (dx * sinf(an) + dy * cosf(an)) * sc;
+      drawBall(x, y, BALL_R * (1 - 0.7f * u), 0.3f + 0.6f * u);
+    }
   if (spitT >= 0)
   {
     int hi = 0;
@@ -2209,9 +2699,53 @@ void Game7::drawDynamic()
     if (y.k <= 0)
       continue;
     float sc = i == 0 ? y.k : 1;
+    // 提灯おばけが玉を飲みこんだあとは、ふくらんで、中がぽっと光る
+    float full = i == 0 && gulpT >= GULP_IN ? sinf(PI_F * (gulpT - GULP_IN) / (GULP_N - GULP_IN)) : 0;
+    if (i == 0)
+      sc *= 1 + 0.3f * full;
     if (i == 0) // 左右の妖怪は壁の裏から出てくるので、影は描かない (壁にかかる)
       d2::C(y.x + 2, y.y + 3, YR * sc, 0x000000, 60);
-    drawYokai(i, y.x, y.y, sc, y.hitT > 0, i);
+    drawYokai(i, y.x, y.y, sc, y.hitT > 0 || (i == 0 && gulpT > 0), i);
+    if (full > 0)
+    {
+      d2::C(y.x, y.y + 1, 7 * sc, 0xFFC860, (int)(70 * full));
+      d2::C(y.x, y.y + 1, 3.5f * sc, 0xFFF0C0, (int)(110 * full));
+    }
+  }
+  // 提灯おばけの口へ吸いこまれる玉
+  if (gulpT > 0 && gulpT < GULP_IN && b[gulpBall].st == 5)
+  {
+    const Ball &o = b[gulpBall];
+    drawBall(o.x, o.y, BALL_R * (1 - 0.6f * gulpT / GULP_IN), 0.15f);
+  }
+  // 蹴鞠の小鬼と、蹴られて宙を飛ぶ玉
+  if (km.st != 0)
+  {
+    static const uint32_t ONI_C[3] = {0xB0503C, 0x4E6E9A, 0x5E8A58}; // 色あせた赤鬼・青鬼・緑鬼
+    bool gone = km.st == 4 && km.t > 22;
+    for (int k = 0; k < 3; k++)
+    {
+      if (km.st == 1 && km.t < 6)
+        continue; // 煙のあとから出てくる
+      if (!gone)
+      {
+        d2::C(km.x[k] + 1.5f, km.y[k] + 8, 5, 0x000000, 50);
+        drawOni(km.x[k], km.y[k], ONI_C[k], km.face[k], km.kickT[k] > 0, km.hitT[k] > 0, km.ph + k * 7);
+      }
+      if (km.st == 1 && km.t < 14)
+        drawPuff(km.hx[k], km.hy[k], 14 - km.t);
+      if (gone && km.t < 36)
+        drawPuff(km.x[k], km.y[k], 14 - (km.t - 22));
+    }
+    if (km.st >= 1 && km.st <= 3)
+    {
+      const Ball &o = b[km.ball];
+      float u = km.flyN ? (float)km.fly / km.flyN : 0, h = km.fly < km.flyN || km.st == 2 ? km.hop * sinf(PI_F * u) : 0;
+      if (km.st == 1)
+        h = 3 * fabsf(sinf(km.t * 0.4f)); // 出てくるあいだは、その場で小さく弾む
+      d2::C(o.x + 1.5f + h * 0.2f, o.y + 2.5f + h * 0.3f, BALL_R * (1 - h / 80), 0x000000, 70 - (int)h);
+      drawBall(o.x, o.y - h, BALL_R * (1 + h / 70), 0);
+    }
   }
   // 化け狸の葉っぱと、どろんの煙
   if (bake.hole >= 0)
@@ -2344,6 +2878,12 @@ void Game7::drawHud(Gfx &g)
         txt(g, (int)p.x, py, 0x9AC070, "LEAF...", true);
       else if (p.kind == 2)
         txt(g, (int)p.x, py, BRASS, "SPILL!", true, 2);
+      else if (p.kind == 3)
+        txt(g, (int)p.x, py, 0xE8A060, "GULP!", true, 2);
+      else if (p.kind == 4)
+        txt(g, (int)p.x, py, 0xB890E0, "BOO!", true, 2);
+      else if (p.kind == 5)
+        txt(g, (int)p.x, py, CREAM, "KEMARI!", true);
       else
       {
         snprintf(s, sizeof(s), "+%d", p.v);

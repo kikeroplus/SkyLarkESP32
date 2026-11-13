@@ -557,7 +557,7 @@ void serialCommands()
       kSw1.hit = true;
     else if (c == 'z' && game7) // 7 本目: 持ち玉を 0 にする
       game7->debugEnd();
-    else if (strchr("PBWTKE", c) && c && game7) // 7 本目: 妖怪の出来事をすぐ起こす
+    else if (strchr("PBWTKEGLM", c) && c && game7) // 7 本目: 妖怪の出来事をすぐ起こす
       game7->debugEvent(c);
     else if (c == 'a' && game7) // 7 本目: 自動で遊ぶを切り替える
       game7->autoPlay = !game7->autoPlay;
@@ -1169,8 +1169,8 @@ void loop7()
   if (millis() - lastLog >= 5000 && frames > 0)
   {
     uint32_t f = frames;
-    Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f  (game draw %lu)  shots %d win %d stolen %d\n", drawUs / f, drawMax,
-                  gfx.usPush / f, stepUs / f, f * 1000.0f / (millis() - lastLog), game7->profDraw / f, game7->statShots, game7->statWin, game7->statStolen);
+    Serial.printf("draw avg %lu us max %lu us (push wait %lu)  step %lu us  fps %.1f  (game draw %lu)  shots %d win %d stolen %d gulp %d suck %d kemari %d\n", drawUs / f, drawMax,
+                  gfx.usPush / f, stepUs / f, f * 1000.0f / (millis() - lastLog), game7->profDraw / f, game7->statShots, game7->statWin, game7->statStolen, game7->statGulp, game7->statSuck, game7->statKemari);
     game7->profDraw = 0;
     drawUs = drawMax = stepUs = frames = 0;
     gfx.usPush = 0;

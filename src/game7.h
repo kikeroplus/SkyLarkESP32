@@ -20,9 +20,10 @@ public:
   void Step(const Input &in);
   void Draw(Gfx &g);
   void debugEnd(); // 確かめる用: 持ち玉を 0 にする
-  void debugEvent(char c); // 確かめる用: P = 百鬼夜行、B = 化け狸、W = 座敷わらし、T = 玉どろぼう、K = 猫又、E = 巣を 9 個に
+  void debugEvent(char c); // 確かめる用: P = 百鬼夜行、B = 化け狸、W = 座敷わらし、T = 玉どろぼう、K = 猫又、E = 巣を 9 個に、G = おばけホール、L = 提灯おばけ、M = 蹴鞠
   bool autoPlay = false;
   int statShots = 0, statWin = 0, statStolen = 0; // 確かめる用: 打った数と払い出しの合計 (割合を見る)、玉どろぼうに取られた数
+  int statGulp = 0, statSuck = 0, statKemari = 0; // 確かめる用: 提灯おばけに飲まれた数、おばけホールに吸われた数、蹴鞠の回数
 
   Rank Table[5] = {{220, "UME"}, {170, "MAT"}, {130, "TAK"}, {90, "KAM"}, {50, "SAK"}};
   char LastName[4] = "AAA";
@@ -45,7 +46,8 @@ private:
   struct Ball
   {
     float x, y, vx, vy;
-    uint8_t st; // 0 = 無い、1 = 転がっている、2 = 穴に落ちている、3 = 10 の穴の妖怪がくわえている (このあと吐き出す)、4 = 玉どろぼうが持って逃げている
+    uint8_t st; // 0 = 無い、1 = 転がっている、2 = 穴に落ちている、3 = 10 の穴の妖怪がくわえている (このあと吐き出す)、4 = 玉どろぼうが持って逃げている、
+                // 5 = 提灯おばけが飲みこんでいる、6 = 小鬼が蹴鞠をしている、7 = おばけホールに吸いこまれている
     uint8_t hole;
     int t;    // 落ちている時間 / 止まっている時間
     float rub; // 返しゴムに当たったとき、ゴムを立てる向きへ傾ける角度 (玉ごとにでたらめ)
@@ -55,7 +57,7 @@ private:
   {
     float x, y;
     int v, t;
-    int kind; // 0 = 数、1 = LEAF (化け穴がはずれ)、2 = SPILL! (巣から玉があふれた)
+    int kind; // 0 = 数、1 = LEAF (化け穴がはずれ)、2 = SPILL! (巣から玉があふれた)、3 = GULP! (提灯おばけ)、4 = BOO! (おばけホール)、5 = KEMARI!
   };
 
   struct Yokai // 台に出てくる小さな妖怪。玉が当たるとはじく
@@ -100,6 +102,23 @@ private:
     float x, y, k;
     int st, t;
   };
+  struct Ghost // おばけホール: 台の空いた所にしばらく開き、まわりの玉を吸い寄せて飲みこむ (払い出しはない)
+  {
+    float x, y, k; // k: 開いている量 (0〜1)
+    int st, t;     // 0 = 閉じている、1 = 開く、2 = 開いている、3 = 閉じる
+  };
+  struct Kemari // 蹴鞠: 烏帽子の小鬼が 3 匹、転がっている玉を取って蹴りあい、飽きたら玉を置いて帰る
+  {
+    int st, t;        // 0 = いない、1 = どろんと出てくる、2 = 蹴りあっている、3 = 最後の蹴りで真ん中へ、4 = 帰っていく
+    int ball, holder; // 蹴っている玉と、いま玉を持っている小鬼 (-1 = 玉は宙を真ん中へ)
+    int kicks;        // 残りの蹴る回数
+    int fly, flyN;    // 玉が宙を飛んでいるフレームと、着くまでのフレーム
+    float fx, fy, tx, ty, hop; // 飛んでいる玉の出た所・着く所・高さ
+    float cx, cy;     // 輪の真ん中
+    float x[3], y[3], hx[3], hy[3]; // 小鬼の場所と、輪の中の持ち場
+    int face[3], kickT[3], hitT[3];
+    float ph;
+  };
   struct Coin // 玉どろぼうが落とした小判
   {
     float x, y, vy;
@@ -139,6 +158,9 @@ private:
   Bake bake;
   Warashi zw;
   Coin coin;
+  Ghost gh;
+  Kemari km;
+  int gulpT = 0, gulpBall = 0; // 提灯おばけが玉を飲みこんでからのフレーム (0 = 飲んでいない) と、その玉
   int paradeT = -1, nextParade = 100; // 百鬼夜行: 始まってからのフレーム (-1 = なし) と、次に始まる払い出しの合計
   uint16_t *bgDark[3] = {}; // 百鬼夜行の夜: だんだん暗くした台の絵
 
@@ -159,6 +181,9 @@ private:
   void stepThief();
   void stepNeko();
   void stepExtras();
+  void stepGhost();
+  void stepKemari();
+  void kemariKick(int from, int to, float hop, int n);
   void thiefDrop(bool koban, float nx);
   void pay(float x, float y, int v);
   void addPop(float x, float y, int v, int kind);
